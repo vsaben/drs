@@ -2,6 +2,7 @@
 using System.Drawing;
 using System.Collections.Generic;
 using System.Linq;
+using System.Data.SqlClient;
 
 using GTA;
 using GTA.Math;
@@ -70,16 +71,12 @@ namespace DRS
             return runcontrol;
         }
 
-        public static void Update(RunControl runcontrol)
+        public void Update()
         {
-            /// A: ID Ranges
+            testidrange = testidrange + "-" + DB.LastID("TestControl").ToString();   
 
-            runcontrol.testidrange = runcontrol.testidrange + "-" + DB.LastID("TestControl").ToString();
-
-            // B: Time
-
-            runcontrol.enddatetime = System.DateTime.Now;
-            runcontrol.duration = (runcontrol.enddatetime - runcontrol.startdatetime).Duration();
+            enddatetime = System.DateTime.Now;
+            duration = (enddatetime - startdatetime).Duration();
         }
 
         // 2: Methods ==============================================================================
@@ -95,12 +92,47 @@ namespace DRS
             }
         }
 
-        public static void ResetPlayerAtBase()
+        public void ResetPlayerAtMainBase()
         {
             Function.Call(Hash.RENDER_SCRIPT_CAMS, 0, 1, 0, 0, 0);         // [a] Camera = Player camera
 
             Game.Player.Character.Position = Environment.mainbaseposition; // [b] Return player to the main base
             Game.Player.Character.IsVisible = true;                        // [c] Make player visible                                                                        
         }
+
+        // 3: Database =============================================================================
+
+        public static string[] db_run_control_parameters =
+        {
+            "RunControlID",
+            "TestIDRange",
+            "Iterations",
+            "StartDateTime",
+            "EndDateTime",
+            "Duration"
+        };
+
+        public void ToDB()
+        {
+            SqlConnection cnn = DB.InitialiseCNN();
+
+            string sql_run_control = DB.SQLCommand("RunControl", db_run_control_parameters);
+
+            using (SqlCommand cmd = new SqlCommand(sql_run_control, cnn))
+            {
+                cmd.Parameters.AddWithValue("@RunControlID", id);
+
+                cmd.Parameters.AddWithValue("@TestIDRange", testidrange);
+                cmd.Parameters.AddWithValue("@Iterations", iterations);
+                cmd.Parameters.AddWithValue("@StartDateTime", startdatetime);
+                cmd.Parameters.AddWithValue("@EndDateTime", enddatetime);
+                cmd.Parameters.AddWithValue("@Duration", duration);
+
+                cnn.Open();
+                int res_cmd = cmd.ExecuteNonQuery();
+                cnn.Close();
+            }
+        }
+
     }
 }
