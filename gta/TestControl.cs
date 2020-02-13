@@ -37,11 +37,11 @@ namespace DRS
 
         // 2: Setup =============================================================================
         
-        public static TestControl Setup(RunControl runcontrol)
+        public static TestControl Setup()
         {
             TestControl testcontrol = new TestControl()
             {
-                id = DB.LastID(runcontrol, false) + 1,
+                id = DB.LastID("TestControl") + 1,
                 teststarttime = DateTime.Now 
             };
                        
