@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Data.SqlClient;
 
 using GTA;
 using GTA.Math;
@@ -10,7 +11,7 @@ namespace DRS
     {
         // 1: Properties =========================================================================
 
-        public int id;                            // Test control number
+        public int id;                            
 
         /// A: Test
 
@@ -23,6 +24,7 @@ namespace DRS
         public Vector3 position;
         public Vector3 rotation;
         public int fov;
+        public float height_above_ground;        
 
         /// C: Graphics
 
@@ -54,6 +56,33 @@ namespace DRS
         {
             testendtime = DateTime.Now;
             testduration = (testendtime - teststarttime).Duration().Milliseconds;
+        }
+
+        // 4: Database ==========================================================================
+
+        public static string[] db_test_control_parameters =
+        {
+            "TestControlID", 
+            "Duration"
+        };
+
+        public static string sql_testcontrol = DB.SQLCommand("TestControl", db_test_control_parameters);
+
+        public void ToTestControl()
+        {
+            SqlConnection cnn = DB.InitialiseCNN();
+
+            using (SqlCommand cmd = new SqlCommand(sql_testcontrol, cnn))
+            {
+                cmd.Parameters.AddWithValue("@TestControlID", id);
+                cmd.Parameters.AddWithValue("@Duration", testduration);
+
+                /// Overall: Write to database
+
+                cnn.Open();
+                int res_cmd = cmd.ExecuteNonQuery();
+                cnn.Close();
+            }
         }
 
     }
