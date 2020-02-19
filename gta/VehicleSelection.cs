@@ -18,42 +18,36 @@ namespace DRS
 
         public static Vehicle Random(RunControl runcontrol, Environment environment)
         {                                                        
-            //// i: Obtain nearby vehicles
-
             Vehicle[] nearby_vehicles = World.GetNearbyVehicles(environment.baseposition, 5000f).              /// [a] Nearby vehicles
-                Where(x => AllowableVehicleClass(x.Model)).ToArray<Vehicle>();                                 /// [b] Allowable vehicle types
+                Where(x => AllowableVehicleClassCheck(x.Model)).ToArray<Vehicle>();                            /// [b] Allowable vehicle types
 
-            //// ii: Select (IF nearby vehicle exists) or create vehicle
+            Vehicle res_vehicle = nearby_vehicles[runcontrol.random.Next(nearby_vehicles.Length)];             /// [c] Select random vehicle
 
-            Vehicle res_vehicle = nearby_vehicles[runcontrol.random.Next(nearby_vehicles.Length)];             /// [a] Select vehicle
-
-            //// iii: Set vehicle as persistent
-
-            res_vehicle.IsPersistent = true;
-            res_vehicle.CanBeVisiblyDamaged = true;
+            res_vehicle.IsPersistent = true;                                                                   /// [d] Set vehicle as persistent
+            res_vehicle.CanBeVisiblyDamaged = true;                                                            /// [e] Set vehicle as can be visibly damaged
 
             return res_vehicle;
         }
 
-        /// B: Create "colliding" vehicle of an allowable vehicle class 
+        /// B: Create vehicle of an allowable vehicle class 
 
         public static Vehicle Create(RunControl runcontrol, Vector3 carposition, float heading = 0f)
         {            
-            Model randomcarmodel = AllPossibleCarModels[runcontrol.random.Next(AllPossibleCarModels.Count)];   // [a] Random car model
-            Vehicle res_vehicle = World.CreateVehicle(randomcarmodel, carposition, heading);                   // [b] Create car 
+            Model randomcarmodel = AllPossibleVehicleModels[runcontrol.random.Next(AllPossibleVehicleModels.Count)];   // [a] Random car model
+            Vehicle res_vehicle = World.CreateVehicle(randomcarmodel, carposition, heading);                           // [b] Create car 
 
-            while (!res_vehicle.Exists())
-            {
+            while (!res_vehicle.Exists())                                                                      // [c] Some car models are not created, create another 
+            {                                                                                                  
                 res_vehicle = World.CreateVehicle(randomcarmodel, carposition, heading);               
             }
 
-            res_vehicle.IsPersistent = true;                                                                   // [c] Set car as persistent
-            Function.Call(Hash.REQUEST_VEHICLE_HIGH_DETAIL_MODEL, res_vehicle);                                // [d] High detail model
+            res_vehicle.IsPersistent = true;                                                                   // [d] Set car as persistent
+            Function.Call(Hash.REQUEST_VEHICLE_HIGH_DETAIL_MODEL, res_vehicle);                                // [e] High detail model
 
             return res_vehicle;
         }
 
-        // 2: Parameters =====================================================================================
+        // 2: Parameters =========================================================================================
 
         public static IList<VehicleClass> AllowableVehicleClasses = new List<VehicleClass>
         {
@@ -64,25 +58,25 @@ namespace DRS
             VehicleClass.Industrial,
             VehicleClass.Muscle,
             VehicleClass.Sedans,
+            VehicleClass.Service,
             VehicleClass.Sports,
             VehicleClass.SportsClassics,
             VehicleClass.Super,
             VehicleClass.SUVs, 
-            VehilceClass.Utility,
+            VehicleClass.Utility,
             VehicleClass.Vans
         };
 
-        public static bool AllowableVehicleClass(Model model)
+        public static bool AllowableVehicleClassCheck(Model model)
         {
             VehicleClass vehicleclass = (VehicleClass)Function.Call<int>(Hash.GET_VEHICLE_CLASS_FROM_NAME, model.Hash);
             bool res_class = AllowableVehicleClasses.Contains(vehicleclass);
             return res_class;
         }
 
-        public static IList<VehicleHash> AllPossibleCarHashes = Enum.GetValues(typeof(VehicleHash)).OfType<VehicleHash>()
-            .Where(x => AllowableVehicleClass(new Model(x))).ToList<VehicleHash>();
+        public static IList<VehicleHash> AllPossibleVehicleHashes = Enum.GetValues(typeof(VehicleHash)).OfType<VehicleHash>()
+            .Where(x => AllowableVehicleClassCheck(new Model(x))).ToList<VehicleHash>();
 
-        public static IList<Model> AllPossibleCarModels = AllPossibleCarHashes.Select<VehicleHash, Model>(x => new Model(x)).ToList<Model>();
-        
+        public static IList<Model> AllPossibleVehicleModels = AllPossibleVehicleHashes.Select<VehicleHash, Model>(x => new Model(x)).ToList<Model>();     
     }
 }
