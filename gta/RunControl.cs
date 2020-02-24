@@ -47,7 +47,7 @@ namespace DRS
                 new Vector3(0f, 0f, 0f),                                                        // [b] Offset
                 50f);                                                                           // [c] Field of view                     
 
-            Function.Call(Hash.RENDER_SCRIPT_CAMS, 0, 1, 0, 0, 0);
+            Response.RenderCreatedCameras(false); 
 
             /// B: RunControl class setup            
 
@@ -94,8 +94,7 @@ namespace DRS
 
         public void ResetPlayerAtMainBase()
         {
-            Function.Call(Hash.RENDER_SCRIPT_CAMS, 0, 1, 0, 0, 0);         // [a] Camera = Player camera
-
+            Response.RenderCreatedCameras(false);                          // [a] Camera = Player camera
             Game.Player.Character.Position = Environment.mainbaseposition; // [b] Return player to the main base
             Game.Player.Character.IsVisible = true;                        // [c] Make player visible                                                                        
         }
