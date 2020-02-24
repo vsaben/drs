@@ -131,6 +131,19 @@ namespace DRS
             return res_wvp;
         }
 
+        public static void SetPersistence(List<Entity> entities, bool persist)
+        {
+            if (persist)
+            {
+                foreach (Entity entity in entities) entity.IsPersistent = true;
+            }
+            else
+            {
+                foreach (Entity entity in entities) entity.IsPersistent = false;
+            }
+        }
+
+
         // 4: Database ==========================================================================
 
         public static string[] db_test_control_parameters =
