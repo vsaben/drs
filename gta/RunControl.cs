@@ -94,10 +94,23 @@ namespace DRS
 
         public void ResetPlayerAtMainBase()
         {
-            Response.RenderCreatedCameras(false);                          // [a] Camera = Player camera
+            RenderCreatedCameras(false);                                   // [a] Camera = Player camera
             Game.Player.Character.Position = Environment.mainbaseposition; // [b] Return player to the main base
             Game.Player.Character.IsVisible = true;                        // [c] Make player visible                                                                        
         }
+
+        public static void RenderCreatedCameras(bool on)
+        {
+            if (on)
+            {
+                Function.Call(Hash.RENDER_SCRIPT_CAMS, 1, 1, 0, 0, 0);
+            }
+            else
+            {
+                Function.Call(Hash.RENDER_SCRIPT_CAMS, 0, 1, 0, 0, 0);
+            }
+        }
+
 
         // 3: Database =============================================================================
 
