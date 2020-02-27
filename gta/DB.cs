@@ -11,7 +11,7 @@ namespace DRS
     {
         // 1: Connection string =========================================================================================
 
-        public static string ATTACHED_DB_FILENAME = "C:\\Users\\Vaughn\\projects\\work\\drs\\DRS.mdf"; 
+        public static string ATTACHED_DB_FILENAME = "C:\\Users\\Vaughn\\projects\\work\\drs\\gta\\DRS.mdf"; 
 
         public static SqlConnection InitialiseCNN()
         {
@@ -59,6 +59,16 @@ namespace DRS
         {
             SqlCommand sql_cmd = new SqlCommand("Select max(" + dbname + "ID) from " + dbname, cnn);
             return sql_cmd;
+        }
+
+        // 4: Send all properties to DB ==============================================================================
+
+        public static void ToDB(RunControl runcontrol, TestControl testcontrol, Environment environment, Target target)
+        {
+            SqlConnection cnn = DB.InitialiseCNN();
+
+            Environment.ToDB(testcontrol, environment, cnn);              // [a] Environment 
+            TestControl.ToDB(testcontrol, cnn);                           // [b] Test Control        
         }
     }
 }
