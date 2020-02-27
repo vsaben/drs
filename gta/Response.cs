@@ -13,54 +13,54 @@ namespace DRS
 {
     public static class Response
     {
-        public static void CaptureVicinity(RunControl runcontrol, TestControl testcontrol)
-        {
-            PositionWideCam(runcontrol, testcontrol);
-        }
-
-        public static void CaptureDamagedVehicle(RunControl runcontrol, Vehicle vehicle)
-        {
-
-        }
-
         // 1: Functions =================================================================================================
 
         /// A: Attach camera at random distance and angle to target vehicle
 
-        // public static Vector2 CAM_OFF_R = new Vector2(10f, 100f);
-
         public static void PositionWideCam(RunControl runcontrol, TestControl testcontrol)
         {
-            Game.Player.Character.SetIntoVehicle(testcontrol.target_vehicle, VehicleSeat.Any); // [b] Position player into vehicle
-            
-            //// i: Location offset
+            for(int i = 0; i < 5; i++)
+            {
+                Vector3 locationoffset = LocationOffset(runcontrol);                                                           
 
-            Vector3 locationoffset = LocationOffset(runcontrol, testcontrol.target_vehicle);
-            runcontrol.camera.AttachTo(testcontrol.target_vehicle, locationoffset);
-            RunControl.RenderCreatedCameras(true);
+                //// i: Location offset
 
-            //// ii: Angle offset
+                runcontrol.camera.AttachTo(testcontrol.target_vehicle, locationoffset);
+                RunControl.RenderCreatedCameras(true);
 
-            Script.Wait(1000);
+                runcontrol.camera.PointAt(testcontrol.target_vehicle);
+                Script.Wait(1);
+
+                //// ii: Angle offset
+
+                Vector3 directionoffset = DirectionOffset(runcontrol);
+                runcontrol.camera.PointAt(testcontrol.target_vehicle, directionoffset);
+
+                //// iii: Check if target vehicle is in line-of-sight
+
+                if (TestControl.LOS(testcontrol.target_vehicle)) { break; }
+
+                UI.Notify(i.ToString()); // ADJUST
+            }
+            Script.Wait(2000);
         }
 
         //// ii: Location Offset 
 
         public static float CAM_MIN_DIST = 10f;                                                    // [a] In all positive upvector space
-        public static float CAM_EXC_DIST = 90f;
-        public static Vector3 LocationOffset(RunControl runcontrol, Vehicle vehicle)
+        public static float CAM_EXC_DIST = 40f;
+        public static Vector3 LocationOffset(RunControl runcontrol)
         {
-            Vector3 locationoffset =
-                Other.PosNeg(runcontrol) * (CAM_MIN_DIST + (float)runcontrol.random.NextDouble() * CAM_EXC_DIST) * vehicle.RightVector +
-                Other.PosNeg(runcontrol) * (CAM_MIN_DIST + (float)runcontrol.random.NextDouble() * CAM_EXC_DIST) * vehicle.ForwardVector +
-                (CAM_MIN_DIST + (float)runcontrol.random.NextDouble() * CAM_EXC_DIST) * vehicle.UpVector;
+            float cam_dist = CAM_MIN_DIST + CAM_EXC_DIST * (float)runcontrol.random.NextDouble(); 
+            Vector3 location_offset = new Vector3(0f, 0f, 0f).Around(cam_dist);
 
-            return locationoffset;
+            location_offset.Z = CAM_MIN_DIST + CAM_EXC_DIST * (float)runcontrol.random.NextDouble();
+            return location_offset;
         }
 
         //// iii: Angle Offset
 
-        public static void RotationOffset(RunControl runcontrol, Vehicle vehicle)
+        public static Vector3 DirectionOffset(RunControl runcontrol)
         {            
             // Adjust yaw and pitch relative to the camera-to-vehicle directional vector 
             // Assume: Roll is level
@@ -76,7 +76,7 @@ namespace DRS
             Size screen = Game.ScreenResolution;
             float aspect_ratio = screen.Width / screen.Height;
 
-            float v_fov = (float)(2 * Math.Atan(Math.Tan(h_fov / 2) * aspect_ratio);
+            float v_fov = (float)(2 * Math.Atan(Math.Tan(h_fov / 2) * aspect_ratio));
             float pitch_offset = Other.PosNeg(runcontrol) * 0.5f * v_fov * (float)runcontrol.random.NextDouble() / 180f;
 
             // [c] Direction offset
@@ -85,162 +85,74 @@ namespace DRS
                                                   (float)(Math.Cos(pitch_offset) * Math.Sin(yaw_offset)), 
                                                   (float)(-Math.Sin(pitch_offset)));
 
-            runcontrol.camera.PointAt(vehicle, directionoffset);
+            return directionoffset;
         }
 
-        
+        /// B: Take picture 
 
-        
-
-
-        // 5: Methods =========================================================================================
-
-
-
-
-
-
-
-
-
-
-        public static void PictureSequence(RunControl runcontrol, TestControl testcontrol, Target target)
+        public static void TakePicture(TestControl testcontrol, IDictionary<int, string> damage = null)
         {
-            //// i: Create test control image directory
+            string filename = GenerateFileName(testcontrol, damage);                     // [a] Generate file name
 
-            string folder = @"D:\ImageDB\Car";                                             // [a] Type folder
-            string testpath = Path.Combine(folder, testcontrol.id.ToString());             // [b] Test subfolder
+            UI.Notify(filename); // ADJUST
 
-            Directory.CreateDirectory(testpath);                                           // [c] Create directory
+            WriteToTiff.RobustBytesToTiff(filename);                                     // [b] Take picture                                        
+        }
 
-            //// iii: Take picture series
-
-            IDictionary<string, Vector3> Positional = AerialConfiguration.CollisionPositional(runcontrol, target);
-            IList<string> aerialkeys = Positional.Keys.ToList<string>();
-
-            foreach (string aerialkey in aerialkeys)
+        public static string GenerateFileName(TestControl testcontrol, IDictionary<int, string> damage = null)
+        {   
+            IList<string> filename_list = new List<string>
             {
-                //// > Create angle directory
-
-                string anglepath = Path.Combine(testpath, aerialkey);
-                Directory.CreateDirectory(anglepath);
-
-                //// > Position camera at position and point at car center
-
-                Vector3 offset = Positional[aerialkey];                                      // [a] Aerial position
-
-                runcontrol.camera.AttachTo(target.vehicle, offset);                          // [b] Set camera position
-                runcontrol.camera.PointAt(target.vehicle);                                   // [c] Point camera at vehicle           
-
-                //// > Delay camera (allow the environment to load) and take picture
-
-                Script.Wait(2000);                                                           // [d] Wait specified time to move camera
-                TakePicture(runcontrol, testcontrol, anglepath, target.vehicle);             // [e] Take picture
-            }
-        }
-
-        /// B: Take picture
-
-        public static void TakePicture(RunControl runcontrol, TestControl testcontrol, string anglepath, Vehicle vehicle)
-        {
-            WriteToTiff.PrepareGameBuffer(true);                                             // [a] Prepare game buffer
-
-            //// i: File name
-
-            object[] filename_object = new object[4]
-                {
-                    "Car",                                                                 // [a] Test type
-                    runcontrol.id.ToString(),                                              // [b] RunControl ID
-                    testcontrol.id.ToString(),                                             // [c] TestControl ID
-                    testcontrol.iscollision                                                // [d] Whether vehicle is onscreen
-                };
-
-            string filename = String.Join("_", filename_object);                           // Note: w/o .tif
-            string filepath = Path.Combine(anglepath, filename);
-
-            //// iii: Take Picture 
-
-            WriteToTiff.RobustByteToTiff(filepath);                                                    // [a] Take picture
-            WriteToTiff.PrepareGameBuffer(false);                                             // [b] Return game to normal state
-        }
-
-        /*
-public static void Cause(RunControl runcontrol, TestControl testcontrol, Environment environment)
-{
-    //// ii: Position camera and take picture
-
-    AttachCamToCar(runcontrol, testcontrol, vehicle, 20, 8f, 8f);                          /// [a] Move player and camera to vehicle location (with offset)
-
-    /// D: Response
-
-    TakePicture(runcontrol, testcontrol, vehicle);
-
-    /// E: Remove vehicle persistence
-
-    Function.Call(Hash.RENDER_SCRIPT_CAMS, 0, 1, 0, 0, 0);
-    Script.Wait(1);
-
-    Game.Player.Character.IsVisible = false;
-}
-*/
-
-
-
-        /// E: Image paths
-
-        /* 
-
-        public static string[] ImagePaths(RunControl runcontrol, TestControl testcontrol, string testpath, string pos, string atfault = null)
-        {
-            //// i: Create position directory
-
-            string pospath = Path.Combine(testpath, pos);
-            Directory.CreateDirectory(pospath);
-
-            //// ii: Create file name UPTO directory
-
-            object[] filenamepos_object;
-
-
-            filenamepos_object = new object[4]
-            {
-                runcontrol.type,                                             // [a] Test type
-                runcontrol.id.ToString(),                                    // [b] RunControl ID
-                testcontrol.id.ToString(),                                   // [c] TestControl ID
-                pos                                                          // [d] Camera aerial position
+                testcontrol.id.ToString(),                                             // [a] TestControl ID
+                ((int)(testcontrol.altitude)).ToString(),                              // [b] Camera altitude
+                testcontrol.isocclusion,                                               // [c] Check: Weather occlusion is present
+                testcontrol.timeofday                                                  // [d] Check: Day or night
             };
 
-            string filenamepos_string = String.Join("_", filenamepos_object);
-
-            //// ii: Specify image paths
-
-            string[] imagepaths = new string[3];
-
-            int i = 0;
-            foreach(string imagetype in Other.imagetypes)
+            if (!(damage is null))
             {
-                string filename = filenamepos_string + "_" + imagetype + ".tif";    // [f] Formulate file name
-                imagepaths[i] = Path.Combine(pospath, filename);                    // [g] Amalgamate complete image path
-                i++;                                                                // [h] Iterator
+                filename_list.Append<string>(damage.Keys.ElementAt<int>(0).ToString());// [e] Add damaged vehicle's id
+                filename_list.Append<string>(damage.Values.ElementAt<string>(0));      // [f] Add damage capture position (if applicable)
             }
 
-            return imagepaths;
+            string filename = String.Join("_", filename_list);                         // Note: w/o .tif
+            return filename;
         }
-        */
 
-        // TYPE C: COLLISION POSITIONAL 
+        /// C: Take picture sequence of damaged vehicles
+        public static void CaptureDamagedVehicle(RunControl runcontrol, TestControl testcontrol, Target target)
+        {
+            IDictionary<string, Vector3> cam_offsets = CollisionPositional(runcontrol, target.vehicle);     // [a] Camera positions
+
+            foreach (KeyValuePair<string, Vector3> cam_offset in cam_offsets)                               // <car pos name, car pos vector3> 
+            {
+                Game.Player.Character.SetIntoVehicle(target.vehicle, VehicleSeat.Any);                      // [b] Place character in vehicle
+                runcontrol.camera.AttachTo(target.vehicle, cam_offset.Value);                               // [c] Place camera at offset position
+
+                Vector3 directionoffset = DirectionOffset(runcontrol);                                      // [d] Randomise camera yaw and and pitch
+                runcontrol.camera.PointAt(target.vehicle, directionoffset);
+                Script.Wait(100);
+                
+                WriteToTiff.PrepareGameBuffer(true);
+
+                IDictionary<int, string> damage = new Dictionary<int, string>() { { target.damage.id, cam_offset.Key } };    
+                TakePicture(testcontrol, damage);                                                           // [e] Take picture
+                
+                WriteToTiff.PrepareGameBuffer(false);               
+            }
+        }
 
         public static Vector2 COL_HEIGHT_R = new Vector2(0f, 2f);
         public static Vector2 COL_DIST_FR = new Vector2(6f, 10f);
         public static Vector2 COL_DIST_RR = new Vector2(5f, 8f);
 
-        public static IDictionary<string, Vector3> CollisionPositional(RunControl runcontrol, Target target)
+        public static IDictionary<string, Vector3> CollisionPositional(RunControl runcontrol, Vehicle vehicle)
         {
             /// A: Directional unit vectors
 
-            Vector3 forwardvector = target.vehicle.ForwardVector;
-            Vector3 rightvector = target.vehicle.RightVector;
-            Vector3 upvector = target.vehicle.UpVector;
+            Vector3 forwardvector = vehicle.ForwardVector;
+            Vector3 rightvector = vehicle.RightVector;
+            Vector3 upvector = vehicle.UpVector;
 
             Vector3 offvector = 5 * upvector;
 
@@ -270,7 +182,6 @@ public static void Cause(RunControl runcontrol, TestControl testcontrol, Environ
             };
 
             return offsets;
-
-        }     
+        }
     }
 }

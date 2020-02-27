@@ -12,8 +12,6 @@ using MathNet.Numerics.LinearAlgebra.Double;
 using MathNet.Numerics.LinearAlgebra;
 using MathNet.Numerics;
 
-using SharpDX.Mathematics;
-
 namespace DRS
 {
     public class TestControl
@@ -33,6 +31,7 @@ namespace DRS
         public Vector3 location;
         public Vector3 rotation;
         public float fov;                     // Camera field-of-view
+        public float altitude;
 
         /// C: Graphics
 
@@ -45,6 +44,9 @@ namespace DRS
         public Vehicle[] vehicles_in_los;     // Vehicle in line-of-sight
         public Ped[] peds_in_los;             // Pedestrians in line-of-sight
 
+        public int numvehicles;               // Number of vehicles in line-of-sight
+        public int numdamaged;                // Number of damaged vehicles
+
         /// E: Collision
 
         public Vehicle target_vehicle;
@@ -52,6 +54,11 @@ namespace DRS
 
         public float angleofimpact;
         public float initialspeed;
+
+        /// F: Separate assessment factors
+
+        public string isocclusion;
+        public string timeofday;
 
         // 2: Setup =============================================================================
         
@@ -66,7 +73,7 @@ namespace DRS
             return testcontrol;
         }
 
-        public void Update(RunControl runcontrol)
+        public void Update(RunControl runcontrol, Environment environment)
         {
             // A: Test
 
@@ -78,6 +85,7 @@ namespace DRS
             location = runcontrol.camera.Position;
             rotation = runcontrol.camera.Rotation;
             fov = runcontrol.camera.FieldOfView;
+            altitude = GetAltitude(runcontrol);
 
             // C: Graphics
 
@@ -90,18 +98,23 @@ namespace DRS
 
             vehicles_in_los = VehiclesInLOS();
             peds_in_los = PedsInLOS();
+
+            // F: Separate assessment factors
+
+            isocclusion = OcclusionCheck(environment); 
+            timeofday = DayCheck(environment);
         }
 
         // 3: Functions =========================================================================
 
         public static Vehicle[] VehiclesInLOS()
         {
-            return (Vehicle[])World.GetAllVehicles().Where<Vehicle>(x => LOS(x));
+            return World.GetAllVehicles().Where<Vehicle>(x => LOS(x)).ToArray();
         }
 
         public static Ped[] PedsInLOS()
         {
-            return (Ped[])World.GetAllPeds().Where<Ped>(x => LOS(x));
+            return World.GetAllPeds().Where<Ped>(x => LOS(x)).ToArray();
         }
 
         public static bool LOS(Entity entity)
@@ -142,7 +155,72 @@ namespace DRS
                 foreach (Entity entity in entities) entity.IsPersistent = false;
             }
         }
+        public static int GetAltitude(RunControl runcontrol)
+        {
+            return (int)(runcontrol.camera.Position.Z - World.GetGroundHeight(runcontrol.camera.Position));
+        }
+        public static string DayCheck(Environment environment)
+        {
+            TimeSpan DAYSTART = new TimeSpan(7, 0, 0);
+            TimeSpan NIGHTSTART = new TimeSpan(19, 0, 0);
 
+            return (environment.gametime >= DAYSTART && environment.gametime < NIGHTSTART) ? "d" : "n";
+        }
+
+        public static string OcclusionCheck(Environment environment)
+        {
+            return (environment.rainlevel > 0 | environment.snowlevel > 0) ? "oc" : "noc";
+        }
+
+        public static bool DamageCheck(Vehicle vehicle)
+        {
+            bool istyreburst = TireBurstCheck(vehicle);        // Unable to check for puncture        
+            bool isbodydamaged = vehicle.BodyHealth < 1000f;
+
+            return isbodydamaged | istyreburst;
+        }
+        public static bool TireBurstCheck(Vehicle vehicle)
+        {
+            IList<VehicleTyre> possibletyres = Target.PossibleTyres(vehicle);
+
+            foreach (VehicleTyre tyre in possibletyres)
+            {
+                bool is_burst = vehicle.IsTireBurst((int)tyre);
+                if(is_burst) return is_burst;
+            }
+            return false;
+        }
+
+        public static void CaptureVehicles(RunControl runcontrol, TestControl testcontrol)
+        {
+            testcontrol.numvehicles = testcontrol.vehicles_in_los.Length;
+
+            Target target;
+
+            foreach (Vehicle vehicle in testcontrol.vehicles_in_los)
+            {
+                bool istarget = object.ReferenceEquals(testcontrol.target_vehicle, vehicle);
+                bool iscollider = object.ReferenceEquals(testcontrol.colliding_vehicle, vehicle);
+
+                if (DamageCheck(vehicle))
+                {
+                    testcontrol.numdamaged += 1;
+                    int damage_id = testcontrol.numdamaged;
+
+                    UI.Notify(damage_id.ToString());
+
+                    target = Target.Setup(vehicle, istarget, iscollider, damage_id);
+                    Response.CaptureDamagedVehicle(runcontrol, testcontrol, target);
+                    vehicle.Delete();
+                }                
+                else
+                {
+                    target = Target.Setup(vehicle, istarget, iscollider);
+                }
+                
+                //// JSON FILE STORAGE/PLACEMENT
+            }
+        }
 
         // 4: Database ==========================================================================
 
@@ -151,21 +229,19 @@ namespace DRS
             "TestControlID", 
             "Duration",
             "NumVehicles",
-            "NumPeds"
+            "NumDamaged"
         };
 
         public static string sql_testcontrol = DB.SQLCommand("TestControl", db_test_control_parameters);
 
-        public void ToTestControl()
+        public static void ToDB(TestControl testcontrol, SqlConnection cnn)
         {
-            SqlConnection cnn = DB.InitialiseCNN();
-
             using (SqlCommand cmd = new SqlCommand(sql_testcontrol, cnn))
             {
-                cmd.Parameters.AddWithValue("@TestControlID", id);
-                cmd.Parameters.AddWithValue("@Duration", testduration);
-                cmd.Parameters.AddWithValue("@NumVehicles", vehicles_in_los.Length);
-                cmd.Parameters.AddWithValue("@NumPeds", peds_in_los.Length);
+                cmd.Parameters.AddWithValue("@TestControlID", testcontrol.id);
+                cmd.Parameters.AddWithValue("@Duration", testcontrol.testduration);
+                cmd.Parameters.AddWithValue("@NumVehicles", testcontrol.numvehicles);
+                cmd.Parameters.AddWithValue("@NumPeds", testcontrol.numdamaged);
 
                 cnn.Open();
                 int res_cmd = cmd.ExecuteNonQuery();

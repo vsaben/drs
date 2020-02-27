@@ -36,7 +36,7 @@ namespace DRS
             Model randomcarmodel = AllPossibleVehicleModels[runcontrol.random.Next(AllPossibleVehicleModels.Count)];   // [a] Random car model
             Vehicle res_vehicle = World.CreateVehicle(randomcarmodel, carposition, heading);                           // [b] Create car 
 
-            while (!res_vehicle.Exists())                                                                      // [c] Some car models are not created, create another 
+            while (res_vehicle is null)                                                                        // [c] Some car models are not created, create another 
             {                                                                                                  
                 res_vehicle = World.CreateVehicle(randomcarmodel, carposition, heading);               
             }

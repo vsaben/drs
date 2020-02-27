@@ -101,7 +101,7 @@ namespace DRS
 
             if (e.KeyCode == Keys.F6) AdditionalMethods.DimensionTest();
 
-            if (e.KeyCode == Keys.F8) AdditionalMethods.PlayerPosition();
+            if (e.KeyCode == Keys.F8) AdditionalMethods.NearestVehicleDamageCheck();
 
             if (e.KeyCode == Keys.F9) AdditionalMethods.MovePlayerToMainBase();
             

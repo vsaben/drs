@@ -97,10 +97,11 @@ namespace DRS
             WriteToTiff.Stencil(ste_path, 1280, 720, Stencil);
         }
 
-        public static string IMAGE_DIR() { return "D:/ImageDB/Surveillance" };
+        public static string IMAGE_DIR = @"D:/ImageDB/Surveillance";
         public static string BasePath(string filename)
         {
-            return Path.Combine(IMAGE_DIR(), filename);
+            Directory.CreateDirectory(IMAGE_DIR);                                         
+            return Path.Combine(IMAGE_DIR, filename);
         }
 
         /// B: Create a robust all buffers to Tif file function

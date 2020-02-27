@@ -14,8 +14,12 @@ namespace DRS
         public static void Cause(RunControl runcontrol, TestControl testcontrol, Environment environment)
         {
             testcontrol.target_vehicle = VehicleSelection.Random(runcontrol, environment);     // [a] Choose target car
-            Create(runcontrol, testcontrol);                                                   // [b] Create collision between target and colliding vehicle
-            PostControl(testcontrol);                                                          // [c] Wait for collision event to end 
+            Script.Wait(1);
+            Game.Player.Character.SetIntoVehicle(testcontrol.target_vehicle, VehicleSeat.Any); // [b] Position player into vehicle
+            Script.Wait(1);
+
+            Create(runcontrol, testcontrol);                                                   // [c] Create collision between target and colliding vehicle
+            PostControl(testcontrol);                                                          // [d] Wait for collision event to end 
         }
 
         // 1: Functions ======================================================================================================
@@ -68,8 +72,8 @@ namespace DRS
 
             //// ii: Ensure car speed is 0
 
-            testcontrol.target_vehicle.Speed = 0;
-            testcontrol.colliding_vehicle.Speed = 0;
+            testcontrol.target_vehicle.Speed = 0f;
+            testcontrol.colliding_vehicle.Speed = 0f;
         }
 
         public static bool EndCheck(Vehicle vehicle, int i)

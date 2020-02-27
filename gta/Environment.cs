@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Linq;
 using System.Collections.Generic;
+using System.Data.SqlClient;
 
 using GTA;
 using GTA.Native;
@@ -113,6 +114,36 @@ namespace DRS
         public static int GetSnowLevel()
         {
             return (int)(Function.Call<float>(Hash.GET_SNOW_LEVEL) * 100);
+        }
+
+        // 4: DB (SQL) ================================================================================
+
+        public static string[] db_environment_parameters =
+        {
+            "EnvironmentID",
+            "Weather",
+            "RainLevel",
+            "SnowLevel",
+            "GameTime"
+        };
+
+        public static void ToDB(TestControl testcontrol, Environment environment, SqlConnection cnn)
+        {
+            string sql_environment = DB.SQLCommand("Environment", db_environment_parameters);
+
+            using (SqlCommand cmd = new SqlCommand(sql_environment, cnn))
+            {
+                cmd.Parameters.AddWithValue("@EnvironmentID", testcontrol.id);
+
+                cmd.Parameters.AddWithValue("@Weather", environment.weather);
+                cmd.Parameters.AddWithValue("@RainLevel", environment.rainlevel);
+                cmd.Parameters.AddWithValue("@SnowLevel", environment.snowlevel);
+                cmd.Parameters.AddWithValue("@GameTime", environment.gametime);
+
+                cnn.Open();
+                int res_cmd = cmd.ExecuteNonQuery();
+                cnn.Close();
+            }
         }
     }
 }

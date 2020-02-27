@@ -47,7 +47,7 @@ namespace DRS
                 new Vector3(0f, 0f, 0f),                                                        // [b] Offset
                 50f);                                                                           // [c] Field of view                     
 
-            Response.RenderCreatedCameras(false); 
+            RenderCreatedCameras(false); 
 
             /// B: RunControl class setup            
 
@@ -110,7 +110,6 @@ namespace DRS
                 Function.Call(Hash.RENDER_SCRIPT_CAMS, 0, 1, 0, 0, 0);
             }
         }
-
 
         // 3: Database =============================================================================
 
