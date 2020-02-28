@@ -49,12 +49,17 @@ namespace DRS
 
         public static float CAM_MIN_DIST = 10f;                                                    // [a] In all positive upvector space
         public static float CAM_EXC_DIST = 40f;
+
+        public static float AZI_MIN_PI_FACTOR = 1/6f;
+        public static float AZI_EXC_PI_FACTOR = 4/6f;
+
         public static Vector3 LocationOffset(RunControl runcontrol)
         {
-            float cam_dist = CAM_MIN_DIST + CAM_EXC_DIST * (float)runcontrol.random.NextDouble(); 
-            Vector3 location_offset = new Vector3(0f, 0f, 0f).Around(cam_dist);
+            float H = CAM_MIN_DIST + CAM_EXC_DIST * (float)runcontrol.random.NextDouble();
+            float theta = (float)(2 * Math.PI * (float)runcontrol.random.NextDouble());
+            float azimuth = (float)(AZI_MIN_PI_FACTOR + AZI_EXC_PI_FACTOR * (float)runcontrol.random.NextDouble());
 
-            location_offset.Z = CAM_MIN_DIST + CAM_EXC_DIST * (float)runcontrol.random.NextDouble();
+            Vector3 location_offset = H * new Vector3((float)Math.Cos(theta), (float)Math.Sin(theta), (float)Math.Tan(azimuth)); 
             return location_offset;
         }
 
@@ -101,7 +106,7 @@ namespace DRS
 
         public static string GenerateFileName(TestControl testcontrol, IDictionary<int, string> damage = null)
         {   
-            IList<string> filename_list = new List<string>
+            List<string> filename_list = new List<string>
             {
                 testcontrol.id.ToString(),                                             // [a] TestControl ID
                 ((int)(testcontrol.altitude)).ToString(),                              // [b] Camera altitude
@@ -111,8 +116,8 @@ namespace DRS
 
             if (!(damage is null))
             {
-                filename_list.Append<string>(damage.Keys.ElementAt<int>(0).ToString());// [e] Add damaged vehicle's id
-                filename_list.Append<string>(damage.Values.ElementAt<string>(0));      // [f] Add damage capture position (if applicable)
+                filename_list.Add(damage.Keys.ElementAt<int>(0).ToString());           // [e] Add damaged vehicle's id
+                filename_list.Add(damage.Values.ElementAt<string>(0));                 // [f] Add damage capture position (if applicable)
             }
 
             string filename = String.Join("_", filename_list);                         // Note: w/o .tif
@@ -126,17 +131,21 @@ namespace DRS
 
             foreach (KeyValuePair<string, Vector3> cam_offset in cam_offsets)                               // <car pos name, car pos vector3> 
             {
-                Game.Player.Character.SetIntoVehicle(target.vehicle, VehicleSeat.Any);                      // [b] Place character in vehicle
-                runcontrol.camera.AttachTo(target.vehicle, cam_offset.Value);                               // [c] Place camera at offset position
+                target.vehicle.Speed = 0f;                                                                  // [b] Stop damaged vehicle
+                TestControl.SetPlayerIntoVehicle(target.vehicle);                                           // [c] Place character in vehicle
+                runcontrol.camera.AttachTo(target.vehicle, cam_offset.Value);                               // [d] Place camera at offset position
 
-                Vector3 directionoffset = DirectionOffset(runcontrol);                                      // [d] Randomise camera yaw and and pitch
+                Vector3 directionoffset = DirectionOffset(runcontrol);                                      // [e] Randomise camera yaw and and pitch
                 runcontrol.camera.PointAt(target.vehicle, directionoffset);
                 Script.Wait(100);
                 
                 WriteToTiff.PrepareGameBuffer(true);
 
-                IDictionary<int, string> damage = new Dictionary<int, string>() { { target.damage.id, cam_offset.Key } };    
-                TakePicture(testcontrol, damage);                                                           // [e] Take picture
+                IDictionary<int, string> damage = new Dictionary<int, string>() { { target.damage.id, cam_offset.Key } };
+
+                UI.Notify(damage.Values.ElementAt<string>(0));        // ADJUST
+
+                TakePicture(testcontrol, damage);                                                           // [f] Take picture
                 
                 WriteToTiff.PrepareGameBuffer(false);               
             }
