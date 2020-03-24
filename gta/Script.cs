@@ -19,20 +19,16 @@ namespace DRS
         public Primary()
         {
             Setup();
-   
+
             Tick += Primary_Tick;
             KeyDown += Primary_KeyDown;
         }
 
         public void Setup()
         {
-            // 0: Menu pool AND main menu
-
             menupool = new MenuPool();                        
             mainmenu = new UIMenu("DRS Control Panel", "");
             menupool.Add(mainmenu);
-
-            // 1: Sub-menus
 
             ExperimentMenu();
             FileMenu();
@@ -42,7 +38,7 @@ namespace DRS
         {
             UIMenu carmenu = menupool.AddSubMenu(mainmenu, "Experiment");                     
 
-            UIMenuItem iterations = new UIMenuItem("Number of iterations");              /// [i] Iterations
+            UIMenuItem iterations = new UIMenuItem("Number of iterations");             
             carmenu.AddItem(iterations);
 
             carmenu.OnItemSelect += (sender, item, index) =>
@@ -58,7 +54,7 @@ namespace DRS
 
         public void FileMenu()
         {
-            UIMenu filemenu = menupool.AddSubMenu(mainmenu, "File Directories");         /// [a] File Directories
+            UIMenu filemenu = menupool.AddSubMenu(mainmenu, "File Directories");         
 
             IDictionary<string, string> fileloc = new Dictionary<string, string>
             {
