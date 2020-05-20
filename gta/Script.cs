@@ -13,7 +13,6 @@ namespace DRS
         private MenuPool menupool;
         private UIMenu mainmenu;
         public static RunControl runcontrol;
-
         public Primary()
         {
             Setup();
@@ -80,26 +79,17 @@ namespace DRS
             };
         }
 
-        // Per frame
+        // Events: Per frame and key down 
 
         void Primary_Tick(object sender, EventArgs e)
         {
             if (menupool != null) menupool.ProcessMenus();
         }
 
-        // Per key
-
         void Primary_KeyDown(object sender, KeyEventArgs e)
         {
-            if (e.KeyCode == Keys.N) AdditionalMethods.NumVehiclesDamaged();
-
-            if (e.KeyCode == Keys.F6) AdditionalMethods.DimensionTest();
-
-            if (e.KeyCode == Keys.F8) AdditionalMethods.NearestVehicleDamageCheck();
-
-            if (e.KeyCode == Keys.F9) AdditionalMethods.MovePlayerToMainBase();
-            
-            if (e.KeyCode == Keys.F10 && !menupool.IsAnyMenuOpen())
+            if (e.KeyCode == Keys.F9) AdditionalMethods.MovePlayerToMainBase();   // Reset player at the main base [F9]
+            if (e.KeyCode == Keys.F10 && !menupool.IsAnyMenuOpen())               // Open experiment menu [F10]
             {
                 mainmenu.Visible = !mainmenu.Visible;
             }       
