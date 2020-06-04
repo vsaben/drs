@@ -33,40 +33,37 @@ namespace DRS
 
         // 1: Setup ===================================================================================
 
-        public static Vector3 playeroffset = new Vector3(5f, 5f, 0f);                           // [a] Player initialisation positioning offset 
+        public static Vector3 PLAYEROFFSET = new Vector3(5f, 5f, 0f);                           // Default player camera offset 
 
         public static RunControl Setup(int iter)
         {
-            Game.Player.Character.Position = Environment.mainbaseposition + playeroffset;      
-            Script.Wait(2000);                                                                  // [a] Allow initial base to load 
+            Game.Player.Character.Position = Environment.MAINBASEPOSITION + PLAYEROFFSET;       // [a] Set player at the main base
+            Script.Wait(2000);                                                                  // [b] Allow initial base to load 
 
             /// A: Initialise camera
 
-            Camera cam = World.CreateCamera(
-                Environment.mainbaseposition,                                                   // [a] Location
-                new Vector3(0f, 0f, 0f),                                                        // [b] Offset
-                50f);                                                                           // [c] Field of view                     
+            Camera cam = World.CreateCamera(                                                     
+                Environment.MAINBASEPOSITION,                                                   // Location
+                new Vector3(0f, 0f, 0f),                                                        // Offset
+                55.0f);                                                                         // Field of view (vertical)                    
 
-            RenderCreatedCameras(false); 
+            RenderCreatedCameras(false);                                                         
 
             /// B: RunControl class setup            
 
             RunControl runcontrol = new RunControl()
-            {                
+            {
+                id = DB.LastID("RunControl") + 1,
                 iterations = iter,
+                testidrange = (DB.LastID("TestControl") + 1).ToString(),
                 startdatetime = System.DateTime.Now,
                 random = new Random(),
                 camera = cam,
             };
 
-            runcontrol.id = DB.LastID("RunControl") + 1;
-
-            int nexttestid = DB.LastID("TestControl") + 1;
-            runcontrol.testidrange = nexttestid.ToString();
-
             /// C: Turn off game features
 
-            GameplayOptions(true);
+            TurnOffGameplayOptions(true);
 
             return runcontrol;
         }
@@ -81,35 +78,29 @@ namespace DRS
 
         // 2: Methods ==============================================================================
 
-        public static void GameplayOptions(bool turnoff)
+        public static void TurnOffGameplayOptions(bool turnoff)
         {
-            Game.Player.Character.IsVisible = !turnoff;           // Make player invisible
-            Game.Player.Character.IsInvincible = turnoff;         // Player cannot be killed
-            Game.Player.IgnoredByPolice = turnoff;                // Player is ignored by the police
-            if (turnoff)
-            {
-                Game.MaxWantedLevel = 0;                          // Maximum wanted level is 0
-            }
+            // Function - Output: Turn on/off environment impediments 
+
+            Game.Player.Character.IsVisible = !turnoff;                    // [a] Make player invisible
+            Game.Player.Character.IsInvincible = turnoff;                  // [b] Player cannot be killed
+            Game.Player.IgnoredByPolice = turnoff;                         // [c] Player is ignored by the police
+            if (turnoff) Game.MaxWantedLevel = 0;                          // [d] Maximum wanted level is 0
         }
 
         public void ResetPlayerAtMainBase()
         {
             RenderCreatedCameras(false);                                   // [a] Camera = Player camera
-            Game.Player.Character.Position = Environment.mainbaseposition; // [b] Return player to the main base
+            Game.Player.Character.Position = Environment.MAINBASEPOSITION; // [b] Return player to the main base
             Game.Player.Character.IsVisible = true;                        // [c] Make player visible                                                                        
         }
 
         public static void RenderCreatedCameras(bool on)
         {
-            if (on)
-            {
-                Function.Call(Hash.RENDER_SCRIPT_CAMS, 1, 1, 0, 0, 0);
-            }
-            else
-            {
-                Function.Call(Hash.RENDER_SCRIPT_CAMS, 0, 1, 0, 0, 0);
-            }
+            if (GameplayCamera.IsRendering != on) return;
+            Function.Call(Hash.RENDER_SCRIPT_CAMS, Convert.BoolToInt(on), 1, 0, 0, 0);            
         }
+
 
         // 3: Database =============================================================================
 
@@ -123,11 +114,12 @@ namespace DRS
             "Duration"
         };
 
+        public static string sql_run_control = DB.SQLCommand("RunControl", db_run_control_parameters);
+
         public void ToDB()
         {
+            Update();
             SqlConnection cnn = DB.InitialiseCNN();
-
-            string sql_run_control = DB.SQLCommand("RunControl", db_run_control_parameters);
 
             using (SqlCommand cmd = new SqlCommand(sql_run_control, cnn))
             {

@@ -13,184 +13,205 @@ namespace DRS
 {
     public static class Response
     {
-        // 1: Functions =================================================================================================
-
-        /// A: Attach camera at random distance and angle to target vehicle
-
-        public static void PositionWideCam(RunControl runcontrol, TestControl testcontrol)
+        // 1: Camera Control ==================================================================================================================
+        public static bool PositionCam(RunControl runcontrol, TestControl testcontrol, double theta = 0)
         {
-            for(int i = 0; i < 5; i++)
-            {
-                Vector3 locationoffset = LocationOffset(runcontrol);                                                           
+            // Function: Attach camera at random distance and angle to target vehicle, maintaining LOS (3 tries)
+            // Output: Bool - Whether target vehicle is in LOS
 
-                //// i: Location offset
-
-                runcontrol.camera.AttachTo(testcontrol.target_vehicle, locationoffset);
-                RunControl.RenderCreatedCameras(true);
-
-                runcontrol.camera.PointAt(testcontrol.target_vehicle);
-                Script.Wait(1);
-
-                //// ii: Angle offset
-
-                Vector3 directionoffset = DirectionOffset(runcontrol);
-                runcontrol.camera.PointAt(testcontrol.target_vehicle, directionoffset);
-
-                //// iii: Check if target vehicle is in line-of-sight
-
-                if (TestControl.LOS(testcontrol.target_vehicle)) { break; }
-
-                UI.Notify(i.ToString()); // ADJUST
+            for (int i = 0; i < 3; i++)
+            {                
+                LocationOffset(runcontrol, testcontrol, theta);                 // [a] Position created camera (location only)    
+                Script.Wait(2000);
+                
+                bool inlos = EntitiesInLOS.IsInLOS(testcontrol.target_vehicle); // [b] Check if the target vehicle is in LOS
+                if (inlos)
+                {                   
+                    RotationOffset(runcontrol);                                 // [c] Adjust camera angle                                 
+                    Script.Wait(2000);
+                    return inlos;                                               // [d] Return true if target vehicle is in LOS    
+                }
             }
-            Script.Wait(2000);
+
+            return false;                                                       // [f] Return false if target vehicle not in LOS (after 3 attempts)
         }
 
-        //// ii: Location Offset 
+        /// A: Location Offset
 
-        public static float CAM_MIN_DIST = 10f;                                                    // [a] In all positive upvector space
-        public static float CAM_EXC_DIST = 40f;
-
-        public static float AZI_MIN_PI_FACTOR = 1/6f;
-        public static float AZI_EXC_PI_FACTOR = 4/6f;
-
-        public static Vector3 LocationOffset(RunControl runcontrol)
+        public static Dictionary<string, Vector2> LOCATION_OFFSET_PARAMS_WIDE = new Dictionary<string, Vector2>()
         {
-            float H = CAM_MIN_DIST + CAM_EXC_DIST * (float)runcontrol.random.NextDouble();
-            float theta = (float)(2 * Math.PI * (float)runcontrol.random.NextDouble());
-            float azimuth = (float)(AZI_MIN_PI_FACTOR + AZI_EXC_PI_FACTOR * (float)runcontrol.random.NextDouble());
+            {"H",  new Vector2(10f, 50f)},                                     // H = Height
+            {"W",  new Vector2(0f, 50f)},                                      // W = Width
+            {"AZI", new Vector2(1/6f, 3/6f)}                                   // AZI = Azimuth pi factor                                                           
+        };
 
-            Vector3 location_offset = H * new Vector3((float)Math.Cos(theta), (float)Math.Sin(theta), (float)Math.Tan(azimuth)); 
-            return location_offset;
-        }
+        public static Dictionary<string, Vector2> LOCATION_OFFSET_PARAMS_NEAR = new Dictionary<string, Vector2>()
+        {
+            {"H", new Vector2(5f, 15f)},                                       
+            {"W",  new Vector2(5f, 10f)},                                      
+            {"AZI", new Vector2(1/6f, 2.5f/6f)}                                                                                        
+        };
 
-        //// iii: Angle Offset
+        public static void LocationOffset(RunControl runcontrol, TestControl testcontrol, double theta = 0)
+        {
+            // Function: Determine camera position offset to target vehicle
+            // Output: Move camera position
 
-        public static Vector3 DirectionOffset(RunControl runcontrol)
-        {            
-            // Adjust yaw and pitch relative to the camera-to-vehicle directional vector 
-            // Assume: Roll is level
-            // Note: Radian conversion
+            /// A: Select correct offset parameters
+
+            Dictionary<string, Vector2> location_offset_params = testcontrol.iswide ? 
+                LOCATION_OFFSET_PARAMS_WIDE : LOCATION_OFFSET_PARAMS_NEAR;
+            Vector2 h = location_offset_params["H"];
+            Vector2 w = location_offset_params["W"];
+            Vector2 azi = location_offset_params["AZI"];
+            if (testcontrol.iswide) theta = 2 * Math.PI * (float)runcontrol.random.NextDouble();
             
-            // [a] Yaw
+            /// B: Determine location offset
 
-            float h_fov = runcontrol.camera.FieldOfView;
-            float yaw_offset = Other.PosNeg(runcontrol) * 0.5f * h_fov * (float)runcontrol.random.NextDouble() / 180f;
+            float H = h[0] + (h[1] - h[0]) * (float)runcontrol.random.NextDouble();                 // XY
+            float W = w[0] + (w[1] - w[0]) * (float)runcontrol.random.NextDouble();                 // XY
+            float azimuth = azi[0] + (azi[1] - azi[0]) * (float)runcontrol.random.NextDouble();     // XY-Z
+            Vector3 location_offset = new Vector3(W * (float)Math.Sin(theta), W * (float)Math.Cos(theta), H * (float)Math.Cos(azimuth));
+            
+            /// C: Control camera
+            
+            runcontrol.camera.Position = testcontrol.target_vehicle.Position + location_offset;     // [a] Position camera
+            RunControl.RenderCreatedCameras(true);                                                  // [b] Switch camera on 
+            runcontrol.camera.PointAt(testcontrol.target_vehicle);                                  // [c] Point camera directly at the target vehicle 
+        }
 
-            // [b] Pitch
+        public static Dictionary<DamagePosition, double> ThetaPositional(RunControl runcontrol)
+        {
+            // Function: Control offset angle in XY plane corresponding to 4 damage capture corners
+            // Output: 4 theta angles
 
+            Dictionary<DamagePosition, double> res_theta = new Dictionary<DamagePosition, double>(); 
+                     
+            foreach(DamagePosition position in Enum.GetValues(typeof(DamagePosition))) 
+            {
+                double theta_deg = (int)position * 90 + 15 + 60 * runcontrol.random.NextDouble();
+                double theta_rad = theta_deg / 180 * Math.PI;
+
+                res_theta.Add(position, theta_rad);
+            }
+
+            return res_theta;                                                      
+        }
+
+        /// B: Angle Offset
+
+        public static float FOV_MARGIN_PER = 0.4f;
+        public static void RotationOffset(RunControl runcontrol)
+        {
+            // Function: Adjust yaw and pitch relative to the camera-to-vehicle rotation (Assume roll is level) 
+            //           whilst maintaining view of the target vehicle
+            // Output: Adjust camera rotation 
+            // Notes: 
+            //        - Rotation: <pitch, roll, yaw>
+            //        - Half-rotation about axis
+            //        - Radian conversion 
+            //        - FOV margin
+
+            /// A: Field-of-view
+
+            float vfov = runcontrol.camera.FieldOfView;
             Size screen = Game.ScreenResolution;
-            float aspect_ratio = screen.Width / screen.Height;
 
-            float v_fov = (float)(2 * Math.Atan(Math.Tan(h_fov / 2) * aspect_ratio));
-            float pitch_offset = Other.PosNeg(runcontrol) * 0.5f * v_fov * (float)runcontrol.random.NextDouble() / 180f;
+            float aspect_ratio = (float)screen.Width / screen.Height;
+            float hfov = HFOV(vfov, aspect_ratio);                                            // [a] Calculate horizontal FOV
 
-            // [c] Direction offset
+            /// B: Rotation matrix adjustment 
 
-            Vector3 directionoffset = new Vector3((float)(Math.Cos(pitch_offset) * Math.Cos(yaw_offset)), 
-                                                  (float)(Math.Cos(pitch_offset) * Math.Sin(yaw_offset)), 
-                                                  (float)(-Math.Sin(pitch_offset)));
+            float yaw_offset = RandomFOVOffset(runcontrol, hfov, FOV_MARGIN_PER);
+            float pitch_offset = RandomFOVOffset(runcontrol, vfov, FOV_MARGIN_PER);
+            Vector3 rotationoffset = new Vector3(pitch_offset, 0f, yaw_offset);
 
-            return directionoffset;
+            /// C: Adjust rotation matrix
+
+            Vector3 camera_to_vehicle_rotation = runcontrol.camera.Rotation;                 // [b] Find direct camera to target rotation
+            runcontrol.camera.StopPointing();                                                // [c] Stop camera pointing at the target
+            runcontrol.camera.Rotation = camera_to_vehicle_rotation + rotationoffset;        // [d] Adjust camera rotation with offset
         }
-
-        /// B: Take picture 
-
-        public static void TakePicture(TestControl testcontrol, IDictionary<int, string> damage = null)
+        public static float HFOV(float vfov, float aspect)
         {
-            string filename = GenerateFileName(testcontrol, damage);                     // [a] Generate file name
+            // Function - Output: Calculate horizontal FOV from vertical FOV and the aspect ratio (in degrees)
 
-            UI.Notify(filename); // ADJUST
+            float vfov_rad = (float)((vfov / 180) * Math.PI);
+            float hfov_rad = (float)(2 * Math.Atan(Math.Tan(vfov_rad / 2) * aspect));
+            float hfov = (float)((hfov_rad / Math.PI) * 180);
+            return hfov;
+        }
+        public static float RandomFOVOffset(RunControl runcontrol, float fov, float fov_margin_per)
+        {
+            // Function - Output: Calculate random fov offset (uniform) maintaining the original focal point
 
-            WriteToTiff.RobustBytesToTiff(filename);                                     // [b] Take picture                                        
+            float half_offset = 0.5f * fov * (1 - fov_margin_per);
+            float res_offset = half_offset * (-1 + 2 * (float)runcontrol.random.NextDouble());
+            return res_offset;
         }
 
-        public static string GenerateFileName(TestControl testcontrol, IDictionary<int, string> damage = null)
-        {   
-            List<string> filename_list = new List<string>
-            {
-                testcontrol.id.ToString(),                                             // [a] TestControl ID
-                ((int)(testcontrol.altitude)).ToString(),                              // [b] Camera altitude
-                testcontrol.isocclusion,                                               // [c] Check: Weather occlusion is present
-                testcontrol.timeofday                                                  // [d] Check: Day or night
-            };
+        // 2: Take picture =======================================================================================================       
+        public static void TakePicture(TestControl testcontrol)
+        {
+            // Function: Take picture of current screen
+            // Output: Colour, depth and stencil images
 
-            if (!(damage is null))
-            {
-                filename_list.Add(damage.Keys.ElementAt<int>(0).ToString());           // [e] Add damaged vehicle's id
-                filename_list.Add(damage.Values.ElementAt<string>(0));                 // [f] Add damage capture position (if applicable)
+            string filepath = ST.GenerateFilePath(testcontrol);                       // [a] Generate file path w/o ext.
+            WriteToTiff.RobustBytesToTiff(filepath);                                  // [b] Take picture                                        
+        }
+
+        public static void Capture(RunControl runcontrol, TestControl testcontrol, Environment environment, double theta = 0)
+        {
+            // Function: Prepare game buffer, take picture of screen and save scene information (if target inlos)
+            // Output: Images and annotations
+
+            bool inlos = PositionCam(runcontrol, testcontrol, theta);             // [a] Position camera at random location and directional offset to target             
+
+            if (!inlos)
+            {                
+                UI.ShowSubtitle("Not in LOS", 1000);
+                return;
             }
 
-            string filename = String.Join("_", filename_list);                         // Note: w/o .tif
-            return filename;
+            WriteToTiff.PrepareGameBuffer(true);                                      
+            TakePicture(testcontrol);                                             // [b] Take a picture            
+            ST.Save(runcontrol, testcontrol, environment);                        // [c] Extract annotations: Camera, control, environment, target, ped (JSON)
+            WriteToTiff.PrepareGameBuffer(false);
+
+            if (testcontrol.iswide) testcontrol.iswidecaptured = true;
         }
-
-        /// C: Take picture sequence of damaged vehicles
-        public static void CaptureDamagedVehicle(RunControl runcontrol, TestControl testcontrol, Target target)
+        
+        // 3: Take picture sequence of damaged vehicles ===============================================================================================
+        
+        public static void CaptureDamagedVehicles(RunControl runcontrol, TestControl testcontrol, Environment environment)
         {
-            IDictionary<string, Vector3> cam_offsets = CollisionPositional(runcontrol, target.vehicle);     // [a] Camera positions
+            // Function: Captures 4 image sequence of all damaged instances from wide view
+            // Output: 4 x image angles, 4 x json
 
-            foreach (KeyValuePair<string, Vector3> cam_offset in cam_offsets)                               // <car pos name, car pos vector3> 
+            testcontrol.iswide = false;
+            if (testcontrol.entities_wide.damaged_vehicles.Count == 0) return;
+
+            List<Vehicle> allowed_damaged_vehicles = testcontrol.entities_wide.damaged_vehicles
+                .Where(x => VehicleSelection.ALLOWED_VEHICLE_CLASSES.Contains(x.ClassType)).ToList();
+            if (allowed_damaged_vehicles.Count == 0) return;
+
+            foreach (Vehicle damaged_vehicle in allowed_damaged_vehicles)                       // [a] Only capture damaged vehicles [allowed classes]
             {
-                target.vehicle.Speed = 0f;                                                                  // [b] Stop damaged vehicle
-                TestControl.SetPlayerIntoVehicle(target.vehicle);                                           // [c] Place character in vehicle
-                runcontrol.camera.AttachTo(target.vehicle, cam_offset.Value);                               // [d] Place camera at offset position
+                testcontrol.target_vehicle = damaged_vehicle;                                   // [b] Set damaged vehicle as target vehicle
+                testcontrol.damaged_instance.id += 1;                                           // [c] Iterate damage counter (for identifier/file name purposes)
 
-                Vector3 directionoffset = DirectionOffset(runcontrol);                                      // [e] Randomise camera yaw and and pitch
-                runcontrol.camera.PointAt(target.vehicle, directionoffset);
-                Script.Wait(100);
-                
-                WriteToTiff.PrepareGameBuffer(true);
-
-                IDictionary<int, string> damage = new Dictionary<int, string>() { { target.damage.id, cam_offset.Key } };
-
-                UI.Notify(damage.Values.ElementAt<string>(0));        // ADJUST
-
-                TakePicture(testcontrol, damage);                                                           // [f] Take picture
-                
-                WriteToTiff.PrepareGameBuffer(false);               
+                CaptureDamagedVehicle(runcontrol, testcontrol, environment);                    // [d] Capture damaged vehicle instance
             }
-        }
-
-        public static Vector2 COL_HEIGHT_R = new Vector2(0f, 2f);
-        public static Vector2 COL_DIST_FR = new Vector2(6f, 10f);
-        public static Vector2 COL_DIST_RR = new Vector2(5f, 8f);
-
-        public static IDictionary<string, Vector3> CollisionPositional(RunControl runcontrol, Vehicle vehicle)
+        }       
+        public static void CaptureDamagedVehicle(RunControl runcontrol, TestControl testcontrol, Environment environment)
         {
-            /// A: Directional unit vectors
+            Dictionary<DamagePosition, double> thetas = ThetaPositional(runcontrol);            // [a] Calculate random theta values in XY quadrants (in radians)
 
-            Vector3 forwardvector = vehicle.ForwardVector;
-            Vector3 rightvector = vehicle.RightVector;
-            Vector3 upvector = vehicle.UpVector;
-
-            Vector3 offvector = 5 * upvector;
-
-            /// B: Pertubations
-
-            IEnumerable<List<Vector3>> pertubations
-                = from no in Enumerable.Range(0, 4)
-                  select new List<Vector3>() {
-                      ((float)(COL_DIST_RR[0] + (COL_DIST_RR[1] - COL_DIST_RR[0]) * runcontrol.random.NextDouble()))*rightvector,
-                      ((float)(COL_DIST_FR[0] + (COL_DIST_FR[1] - COL_DIST_FR[0]) * runcontrol.random.NextDouble()))*forwardvector,
-                      ((float)(COL_HEIGHT_R[0] + (COL_HEIGHT_R[1] - COL_HEIGHT_R[0]) * runcontrol.random.NextDouble()))*upvector
-                  };
-
-            /// C: Positions
-
-            List<Vector3> fr = pertubations.ElementAt(0);
-            List<Vector3> fl = pertubations.ElementAt(1);
-            List<Vector3> bl = pertubations.ElementAt(2);
-            List<Vector3> br = pertubations.ElementAt(3);
-
-            IDictionary<string, Vector3> offsets = new Dictionary<string, Vector3>()
+            foreach (DamagePosition position in Enum.GetValues(typeof(DamagePosition)))
             {
-                {"frontright", offvector + fr[0] + fr[1] + fr[2]},
-                {"frontleft", offvector - fr[0] + fr[1] + fr[2]},
-                {"backleft", offvector - fr[0] - fr[1] + fr[2]},
-                {"backright", offvector + fr[0] - fr[1] + fr[2]}
-            };
-
-            return offsets;
+                testcontrol.damaged_instance.dam_pos = position;                                // [b] Change damage corner
+                Capture(runcontrol, testcontrol, environment, thetas[position]);                // [c] Capture damaged vehicle instance from corner
+            }            
         }
     }
 }

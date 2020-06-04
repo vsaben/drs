@@ -1,70 +1,54 @@
 ﻿using System;
 using GTA;
 
-
 namespace DRS
 {
     public static class Operation
     {
-        // 1: SIMULATION ====================================================================================== 
-
         public static void Test(RunControl runcontrol)
-        {  
-            /// A: Simulation
-            
+        {
+            // Function: Run a single experiment
+            // Output: 1 x wide jpeg/json, 4 x close jpeg/json
+
             TestControl testcontrol = TestControl.Setup();                         // [a] Setup simulation
-            Environment environment = Environment.Setup(runcontrol);               // [b] Initialise environment AND move player to the drone base
+            Environment environment = Environment.Setup(runcontrol, testcontrol);  // [b] Initialise environment AND move player to the drone base
+            Collision.Cause(runcontrol, testcontrol);                              // [c] Cause a collision between a target and colliding vehicle
 
-            /// B: Collision
+            Response.Capture(runcontrol, testcontrol, environment);                // [d] Capture wide image: image, json
 
-            Collision.Cause(runcontrol, testcontrol, environment);                 // [c] Cause a collision between a target and colliding vehicle
-            
-            /// C: Response
+            if (testcontrol.iswidecaptured)
+            {
+                Response.CaptureDamagedVehicles(runcontrol, testcontrol, environment); // [e] Capture damaged target vehicles: 4 x image, 4 x json
+                testcontrol.TestUpdate();                                              // [f] Update time; Delete damaged, target and colliding vehicles; Send DB
+            }
 
-            Response.PositionWideCam(runcontrol, testcontrol);                     // [d] Position camera at random location and directional offset to target 
-
-            WriteToTiff.PrepareGameBuffer(true);
-            testcontrol.Update(runcontrol, environment);
-
-            UI.Notify("Vehicles (Damaged): " + testcontrol.numvehicles.ToString() + " (" + testcontrol.numdamaged.ToString() + ")");
-
-            Response.TakePicture(testcontrol);                                     // [d] Take a picture of wide collision area
-            TestControl.CaptureVehicles(runcontrol, testcontrol);                  // [e] Capture vehicle information 
-                                                                                   //      - Take a variable 4-picture sequence of damaged cars  
-                                                                                   //      - Delete damaged vehicles
-            /// B: Update control and save to database
-
-            WriteToTiff.PrepareGameBuffer(false);
-            Script.Wait(2000);                                                     // [c] Create distinction between successive tests
+            TestControl.DeleteDamagedVehicles(runcontrol);
+            RunControl.RenderCreatedCameras(false);                                // [g] Switch to player camera
+            Script.Wait(2000);                                                     // [h] Create distinction between successive tests
         }
 
-        // 4: Overall: Run ======================================================================================
-
         public static void Run(RunControl runcontrol)
-        {
-            /// A: Run tests
+        {            
+            // Function: Manage simulation
+            // Output: SQL - runcontrol
 
             for (double i = 1; i <= runcontrol.iterations; i++)
             {
-                Operation.Test(runcontrol);                       // [a] Run test
-                Progress(i, runcontrol.iterations);               // [b] Record progress
+                Test(runcontrol);                                                  // [a] Run test
+                Progress(i, runcontrol.iterations);                                // [b] Record progress
             }
-
-            /// B: Update RUNCONTROL database
             
-            // runcontrol.Update();                                  // [a] Update runcontrol properties
-            // runcontrol.ToDB();                                    // [b] Write to RUNCONTROL database
-            runcontrol.ResetPlayerAtMainBase();
+            runcontrol.ToDB();                                                     // [c] Write updated runcontrol to SQL database
+            runcontrol.ResetPlayerAtMainBase();                                    // [d] Reset player at the main base
         }
-
-        // 3: Functions ===========================================================================================
         public static void Progress(double icurrent, int imax)
         {
+            // Function: Record simulation progress
+            // Output: % progression (to screen)
+
             double progress_int = Math.Round((icurrent / imax) * 100);
             string progress_str = icurrent.ToString() + " [" + progress_int.ToString() + "%]";
             UI.ShowSubtitle(progress_str, 1000);
         }
-
-
     }
 }

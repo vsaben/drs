@@ -68,15 +68,14 @@ namespace DRS
                 t.Flush();
             }
         }
-
-        // 2: Functions ==========================================================================
-
-        /// A: Write all buffers to Tif files
         public static void BytesToTiff(string filename)
         {
+            // Function: Write all buffers to Tif files
+            // Output: Colour (1920 x 1080), depth and stencil (1280 x 720) tif images
+
             string basepath = BasePath(filename); 
 
-            //// i: Obtain buffers
+            /// A: Obtain buffers
 
             byte[] Colour = VisionNative.GetColorBuffer();
             byte[] Depth = VisionNative.GetDepthBuffer();
@@ -84,29 +83,31 @@ namespace DRS
 
             Script.Wait(1);
 
-            //// ii: Formulate image paths
+            /// B: Formulate image paths
 
             string col_path = basepath + "_colour.tif";
             string dep_path = basepath + "_depth.tif";
             string ste_path = basepath + "_stencil.tif";
 
-            //// iii: Write to Tiff
+            /// C: Write to Tiff
 
-            WriteToTiff.Colour(col_path, 1280, 720, Colour);
+            WriteToTiff.Colour(col_path, 1920, 1080, Colour);
             WriteToTiff.Depth(dep_path, 1280, 720, Depth);
             WriteToTiff.Stencil(ste_path, 1280, 720, Stencil);
         }
-
-        public static string IMAGE_DIR = @"D:/ImageDB/Surveillance";
         public static string BasePath(string filename)
         {
-            Directory.CreateDirectory(IMAGE_DIR);                                         
-            return Path.Combine(IMAGE_DIR, filename);
-        }
+            // Function: Create directory (if it does exist)
+            // Output: Base path
 
-        /// B: Create a robust all buffers to Tif file function
+            Directory.CreateDirectory(TestControl.OUTPUT_PATH);                                         
+            return Path.Combine(TestControl.OUTPUT_PATH, filename);
+        }
         public static void RobustBytesToTiff(string baseimagepath)
         {
+            // Function: Catches errors and regenerates BytesToTiff function 
+            // Output: BytesToTiff output
+
             try
             {
                 BytesToTiff(baseimagepath);
@@ -119,25 +120,22 @@ namespace DRS
             }
         }
 
-        /// C: Prepare game buffer
+        // 2: Prepare game buffer ====================================================================
 
         public static void PrepareGameBuffer(bool on)
         {
+            // Function - Output: Prepares game buffers (to be written to Tif files) 
+
             if (on)
             {
-                //// i: Prepare game buffer
-
-                Game.Pause(true);                                      // [a] Pause game
-                Game.TimeScale = 0;                                    // [b] Slow down time TO avoid pixel drift
-                Script.Wait(50);                                       // [c] Allow game to load sufficiently
+                Game.TimeScale = 0;                           // [a] Slow down time TO avoid pixel drift OR return to normal  
+                Game.Pause(true);                             // [b] Allow game to load sufficiently
             }
             else
             {
-                //// ii: Return to normal game state
-
-                Game.TimeScale = 1;                                    // [d] Reset timescale
-                Game.Pause(false);                                     // [e] Unpause game
-            }
+                Game.TimeScale = 1;
+                Game.Pause(false);
+            }                                           
         }
     }
 }

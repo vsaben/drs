@@ -11,77 +11,90 @@ namespace DRS
 {
     public static class Collision
     {
-        public static void Cause(RunControl runcontrol, TestControl testcontrol, Environment environment)
+        public static void Cause(RunControl runcontrol, TestControl testcontrol)
         {
-            testcontrol.target_vehicle = VehicleSelection.Random(runcontrol, environment);     // [a] Choose target car
-            Script.Wait(1);
-            Game.Player.Character.SetIntoVehicle(testcontrol.target_vehicle, VehicleSeat.Any); // [b] Position player into vehicle
-            Script.Wait(1);
+            // Function - Output: Cause a collision between a target and colliding vehicle; Wait for the collision to end
 
-            Create(runcontrol, testcontrol);                                                   // [c] Create collision between target and colliding vehicle
-            PostControl(testcontrol);                                                          // [d] Wait for collision event to end 
+            SelectTarget(runcontrol, testcontrol);                                                              // [a] Select target and insert player into any seat
+            Create(runcontrol, testcontrol);                                                                    // [b] Create collision between target and colliding vehicle
+            PostControl(testcontrol);                                                                           // [c] Wait for collision event to end 
         }
 
-        // 1: Functions ======================================================================================================
+        public static void SelectTarget(RunControl runcontrol, TestControl testcontrol)
+        {            
+            testcontrol.target_vehicle = VehicleSelection.Random(runcontrol, testcontrol);                            // [a] Choose target car            
+            Game.Player.Character.SetIntoVehicle(testcontrol.target_vehicle, VehicleSeat.Driver); Script.Wait(1000);  // [b] Position player into vehicle
+        }
 
-        /// A: Create collision between target and colliding vehicle
-
-        public static float START_RADIUS = 0.5f;
-        public static float INITIAL_MIN_SPEED = 20f;
-        public static float INITIAL_EXC_SPEED = 140f;
-
+        public static Dictionary<string, float> COLLISION_PARAMS = new Dictionary<string, float>()
+        {
+            {"SR",  0.5f },  // Start radius
+            {"IMS", 20f },   // Initial minimum speed
+            {"IES", 100f }   // Initial excess speed
+        };
         public static void SetInitialSpeed(RunControl runcontrol, TestControl testcontrol)
         {
-            float initialspeed = (float)(INITIAL_MIN_SPEED + INITIAL_EXC_SPEED * runcontrol.random.NextDouble());
+            // Function - Output: Set the initial speed of the colliding vehicle
+
+            float initialspeed = (float)(COLLISION_PARAMS["IMS"] + COLLISION_PARAMS["IES"] * runcontrol.random.NextDouble());
             testcontrol.colliding_vehicle.Speed = initialspeed;
-            testcontrol.initialspeed = initialspeed;
         }
 
         public static void Create(RunControl runcontrol, TestControl testcontrol)
         {
-            Vehicle target_vehicle = testcontrol.target_vehicle;
+            // Function - Output: Create collision between the target and colliding vehicle
 
-            //// i: Determine colliding vehicle heading and starting position
+            /// A: Determine colliding vehicle heading and starting position
 
-            testcontrol.angleofimpact = (float)(runcontrol.random.NextDouble() * 2 * Math.PI);                  // [a] Angle of impact into target vehicle
+            float angleofimpact = (float)(runcontrol.random.NextDouble() * 2 * Math.PI);                        // [a] Select random angle of impact into target vehicle (in radians)
 
-            Vector3 cv_pos = target_vehicle.Position +                                                          // [b] Colliding vehicle starting position
-                START_RADIUS * target_vehicle.ForwardVector * (float)Math.Cos(testcontrol.angleofimpact) +
-                START_RADIUS * (float)Math.Sin(testcontrol.angleofimpact) * target_vehicle.RightVector;
+            Vector3 cv_pos = testcontrol.target_vehicle.Position +                                              // [b] Colliding vehicle starting position
+                COLLISION_PARAMS["SR"] * testcontrol.target_vehicle.ForwardVector * (float)Math.Cos(angleofimpact) +
+                COLLISION_PARAMS["SR"] * (float)Math.Sin(angleofimpact) * testcontrol.target_vehicle.RightVector;
 
-            float cv_heading = (target_vehicle.Position - cv_pos).ToHeading();                                  // [c] Colliding vehicle heading
+            float cv_heading = (testcontrol.target_vehicle.Position - cv_pos).ToHeading();                      // [c] Colliding vehicle heading
 
-            //// ii: Create colliding vehicle and set its initial speed 
+            /// B: Create collision 
 
-            testcontrol.colliding_vehicle = VehicleSelection.Create(runcontrol, cv_pos, cv_heading);
-            SetInitialSpeed(runcontrol, testcontrol);
+            Vehicle[] nearbyvehicles = World.GetNearbyVehicles(testcontrol.target_vehicle.Position, 100f);      // [d] Freeze nearby vehicles 
+            nearbyvehicles.Select(x => x.FreezePosition = true);
+            testcontrol.target_vehicle.Speed = 0;                                                               // [e] Stop target vehicle (to enable collision)
+            
+            testcontrol.colliding_vehicle = VehicleSelection.Create(runcontrol, cv_pos, cv_heading);            // [f] Create colliding vehicle
+
+            while (testcontrol.colliding_vehicle is null)
+            {
+                testcontrol.colliding_vehicle = VehicleSelection.Create(runcontrol, cv_pos, cv_heading);
+            }
+
+            SetInitialSpeed(runcontrol, testcontrol);                                                           // [g] Set colliding vehicle initial speed
+            nearbyvehicles.Select(x => x.FreezePosition = false);                                               // [h] Unfreeze nearby vehicles
         }
-
-        /// B: Allow collision consequences to take effect  
 
         public static void PostControl(TestControl testcontrol)
         {
-            //// i: Wait for both cars to stop or for 5 seconds to pass 
+            // Function - Output: Freeze target and collider after the collision "ends"   
 
             int i = 0;
             while (EndCheck(testcontrol.target_vehicle, i) | EndCheck(testcontrol.colliding_vehicle, i))
             {
-                Script.Wait(1000);                             // [a] Wait 1 sec 
+                Script.Wait(1000);                             
                 i += 1;
             }
 
-            //// ii: Ensure car speed is 0
-
-            testcontrol.target_vehicle.Speed = 0f;
-            testcontrol.colliding_vehicle.Speed = 0f;
+            List<Vehicle> damaged_vehicles = World.GetNearbyVehicles(testcontrol.target_vehicle.Position, 1000f)
+                .Where(x => Damage.DamageCheck(x)).ToList();
+            
+            damaged_vehicles.ForEach(x => x.FreezePosition = true); 
+            damaged_vehicles.ForEach(x => x.IsPersistent = true);
         }
 
         public static bool EndCheck(Vehicle vehicle, int i)
         {
-            // Conditions: Continue waiting
+            // Function - Output: Check if the collision is still ongoing 
 
-            bool moving = !vehicle.IsStopped;
-            bool activetime = (i <= 5);
+            bool moving = !vehicle.IsStopped;           // [a] Check 1: If the vehicle is still moving
+            bool activetime = (i <= 7);                 // [b] Check 2: If less than 7 seconds have passed
 
             bool res_check = moving && activetime;
             return res_check;

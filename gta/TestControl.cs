@@ -2,23 +2,21 @@
 using System.Collections.Generic;
 using System.Data.SqlClient;
 using System.Linq;
+using System.IO;
 
 using GTA;
 using GTA.Math;
 using GTA.Native;
-using GTAVisionUtils;
-
-using MathNet.Numerics.LinearAlgebra.Double;
-using MathNet.Numerics.LinearAlgebra;
-using MathNet.Numerics;
 
 namespace DRS
 {
     public class TestControl
     {
-        // 1: Properties =========================================================================
+        public static string OUTPUT_PATH = "D:\\ImageDB\\Surveillance\\";    // Image, JSON output path 
 
-        public int id;                            
+        public int id;
+        public string base_filename;                                         // File name w/o specification and ext
+        public Vector3 baseposition;                                         // Drone base position 
 
         /// A: Test time
 
@@ -26,227 +24,173 @@ namespace DRS
         public DateTime testendtime;
         public int testduration;
 
-        /// B: Camera
+        /// B: Entities
 
-        public Vector3 location;
-        public Vector3 rotation;
-        public float fov;                     // Camera field-of-view
-        public float altitude;
+        public EntitiesInLOS entities_wide;                                  // Entities: Vehicles, damaged, peds [wide frame]
 
-        /// C: Graphics
-
-        public DenseMatrix W;                 // World Matrix
-        public DenseMatrix V;                 // View Matrix
-        public DenseMatrix P;                 // Projection Matrix
-
-        /// D: Entities
-
-        public Vehicle[] vehicles_in_los;     // Vehicle in line-of-sight
-        public Ped[] peds_in_los;             // Pedestrians in line-of-sight
-
-        public int numvehicles;               // Number of vehicles in line-of-sight
-        public int numdamaged;                // Number of damaged vehicles
-
-        /// E: Collision
+        /// C: Collision
 
         public Vehicle target_vehicle;
         public Vehicle colliding_vehicle;
 
-        public float angleofimpact;
-        public float initialspeed;
+        /// D: Camera - Damage Control 
 
-        /// F: Separate assessment factors
+        public DamagedInstance damaged_instance;
+        public bool iswide;                                                 // Wide or near camera angle
+        public bool iswidecaptured;                                         // Wide view captured
 
-        public string isocclusion;
-        public string timeofday;
+        // 1: Setup and update =========================================================================================
 
-        // 2: Setup =============================================================================
-        
         public static TestControl Setup()
         {
+            // Function - Output: Setup and output TestControl instance
+
+            RunControl.TurnOffGameplayOptions(true);
+
             TestControl testcontrol = new TestControl()
             {
-                id = DB.LastID("TestControl") + 1,
-                teststarttime = DateTime.Now 
+                id = DB.LastID("TestControl") + 1,              // [a] Get next test ID from SQL database     
+                teststarttime = DateTime.Now,                   // [b] Record test start time
+                damaged_instance = DamagedInstance.Setup(),     // [c] Current damage id [near capture]
+                iswide = true,                                  // [d] Wide or near camera angle 
+                iswidecaptured = false                          // [e] Check if wide view captured
             };
-                       
+
+            testcontrol.GenerateBaseFilePath();                 // [d] Generate base file path: Output path + 6-digit ID 
+
             return testcontrol;
         }
 
-        public void Update(RunControl runcontrol, Environment environment)
-        {
-            // A: Test
+        public void TestUpdate()
+        {   
+            // Function: Update time, remove damaged or involved vehicles
+            // Output: Send test info to SQL DB
 
             testendtime = DateTime.Now;
             testduration = (testendtime - teststarttime).Duration().Milliseconds;
-
-            // B: Camera
-
-            location = runcontrol.camera.Position;
-            rotation = runcontrol.camera.Rotation;
-            fov = runcontrol.camera.FieldOfView;
-            altitude = GetAltitude(runcontrol);
-
-            // C: Graphics
-
-            List<DenseMatrix> list_wvp = GetWVP();
-            W = list_wvp.ElementAt<DenseMatrix>(0);
-            V = list_wvp.ElementAt<DenseMatrix>(1);
-            P = list_wvp.ElementAt<DenseMatrix>(2);
-
-            // D: Entities
-
-            vehicles_in_los = VehiclesInLOS();
-            peds_in_los = PedsInLOS();
-
-            // F: Separate assessment factors
-
-            isocclusion = OcclusionCheck(environment); 
-            timeofday = DayCheck(environment);
+            ToDB();           
         }
 
-        // 3: Functions =========================================================================
-
-        public static Vehicle[] VehiclesInLOS()
+        public static void DeleteDamagedVehicles(RunControl runcontrol)
         {
-            return World.GetAllVehicles().Where<Vehicle>(x => LOS(x)).ToArray();
+            // Function - Output: Deletes damaged (in and out of LOS) vehicles
+
+            World.GetNearbyVehicles(runcontrol.camera.Position, 1000f)
+                .Where(x => Damage.DamageCheck(x)).ToList().ForEach(x => x.Delete());
         }
 
-        public static Ped[] PedsInLOS()
+        // 3: File name ============================================================================================
+        
+        public void GenerateBaseFilePath() => base_filename = OUTPUT_PATH + IntToIDString(6, id);
+
+        public static string IntToIDString(int length, int number)
         {
-            return World.GetAllPeds().Where<Ped>(x => LOS(x)).ToArray();
+            int num_char = number.ToString().Length;
+            string res_string = string.Concat(Enumerable.Repeat("0", length - num_char)) + number.ToString();
+            return res_string;
         }
 
-        public static bool LOS(Entity entity)
-        {
-            return entity.IsOnScreen && !entity.IsOccluded;
-        }
-
-        public static List<DenseMatrix> GetWVP()
-        {
-            /// A: VisionNative Matrices
-
-            rage_matrices? constants = VisionNative.GetConstants();
-
-            DenseMatrix W = (DenseMatrix)MathNet.Numerics.LinearAlgebra.Single.DenseMatrix.
-                OfColumnMajor(4, 4, constants.Value.world.ToArray()).ToDouble();
-            DenseMatrix WV = (DenseMatrix)MathNet.Numerics.LinearAlgebra.Single.DenseMatrix.
-                OfColumnMajor(4, 4, constants.Value.worldView.ToArray()).ToDouble();
-            DenseMatrix WVP = (DenseMatrix)MathNet.Numerics.LinearAlgebra.Single.DenseMatrix.
-                OfColumnMajor(4, 4, constants.Value.worldViewProjection.ToArray()).ToDouble();
-
-            /// B: World-View-Projection Separation
-
-            DenseMatrix V = (DenseMatrix)W.Inverse() * WV;
-            DenseMatrix P = (DenseMatrix)WV.Inverse() * WVP;
-
-            List<DenseMatrix> res_wvp = new List<DenseMatrix>(3) { W, V, P };
-            return res_wvp;
-        }
-
-        public static void SetPersistence(List<Entity> entities, bool persist)
-        {
-            if (persist)
-            {
-                foreach (Entity entity in entities) entity.IsPersistent = true;
-            }
-            else
-            {
-                foreach (Entity entity in entities) entity.IsPersistent = false;
-            }
-        }
-        public static int GetAltitude(RunControl runcontrol)
-        {
-            return (int)(runcontrol.camera.Position.Z - World.GetGroundHeight(runcontrol.camera.Position));
-        }
-        public static string DayCheck(Environment environment)
-        {
-            TimeSpan DAYSTART = new TimeSpan(7, 0, 0);
-            TimeSpan NIGHTSTART = new TimeSpan(19, 0, 0);
-
-            return (environment.gametime >= DAYSTART && environment.gametime < NIGHTSTART) ? "d" : "n";
-        }
-
-        public static string OcclusionCheck(Environment environment)
-        {
-            return (environment.rainlevel > 0 | environment.snowlevel > 0) ? "oc" : "noc";
-        }
-
-        public static bool DamageCheck(Vehicle vehicle)
-        {
-            bool istyreburst = TireBurstCheck(vehicle);        // Unable to check for puncture        
-            bool isbodydamaged = vehicle.BodyHealth < 1000f;
-
-            return isbodydamaged | istyreburst;
-        }
-        public static bool TireBurstCheck(Vehicle vehicle)
-        {
-            IList<VehicleTyre> possibletyres = Target.PossibleTyres(vehicle);
-
-            foreach (VehicleTyre tyre in possibletyres)
-            {
-                bool is_burst = vehicle.IsTireBurst((int)tyre);
-                if(is_burst) return is_burst;
-            }
-            return false;
-        }
-
-        public static void CaptureVehicles(RunControl runcontrol, TestControl testcontrol)
-        {
-            testcontrol.numvehicles = testcontrol.vehicles_in_los.Length;
-
-            Target target;
-
-            foreach (Vehicle vehicle in testcontrol.vehicles_in_los)
-            {
-                bool istarget = object.ReferenceEquals(testcontrol.target_vehicle, vehicle);
-                bool iscollider = object.ReferenceEquals(testcontrol.colliding_vehicle, vehicle);
-
-                if (DamageCheck(vehicle))
-                {
-                    testcontrol.numdamaged += 1;
-                    int damage_id = testcontrol.numdamaged;
-
-                    UI.Notify(damage_id.ToString());
-
-                    target = Target.Setup(vehicle, istarget, iscollider, damage_id);
-                    Response.CaptureDamagedVehicle(runcontrol, testcontrol, target);
-                    vehicle.Delete();
-                }                
-                else
-                {
-                    target = Target.Setup(vehicle, istarget, iscollider);
-                }
-                
-                //// JSON FILE STORAGE/PLACEMENT
-            }
-        }
-
-        // 4: Database ==========================================================================
+        // 4: Save test information to SQL ============================================================
 
         public static string[] db_test_control_parameters =
         {
-            "TestControlID", 
+            "TestControlID",
             "Duration",
             "NumVehicles",
-            "NumDamaged"
+            "NumDamagedVehicles",
+            "NumPeds"
         };
 
         public static string sql_testcontrol = DB.SQLCommand("TestControl", db_test_control_parameters);
 
-        public static void ToDB(TestControl testcontrol, SqlConnection cnn)
+        public void ToDB()
         {
+            SqlConnection cnn = DB.InitialiseCNN();
+
             using (SqlCommand cmd = new SqlCommand(sql_testcontrol, cnn))
             {
-                cmd.Parameters.AddWithValue("@TestControlID", testcontrol.id);
-                cmd.Parameters.AddWithValue("@Duration", testcontrol.testduration);
-                cmd.Parameters.AddWithValue("@NumVehicles", testcontrol.numvehicles);
-                cmd.Parameters.AddWithValue("@NumPeds", testcontrol.numdamaged);
+                cmd.Parameters.AddWithValue("@TestControlID", id);
+                cmd.Parameters.AddWithValue("@Duration", testduration);
+                cmd.Parameters.AddWithValue("@NumVehicles", entities_wide.vehicles.Count);
+                cmd.Parameters.AddWithValue("@NumDamagedVehicles", entities_wide.damaged_vehicles.Count);
+                cmd.Parameters.AddWithValue("@NumPeds", entities_wide.peds.Count);
 
                 cnn.Open();
                 int res_cmd = cmd.ExecuteNonQuery();
                 cnn.Close();
             }
+        }
+    }
+
+    public class EntitiesInLOS
+    {
+        public List<Vehicle> vehicles;
+        public List<Vehicle> damaged_vehicles;
+        public List<Target> targets;
+        public List<PedSummary> peds;
+        public static EntitiesInLOS Setup(RunControl runcontrol)
+        {
+            EntitiesInLOS inlos = new EntitiesInLOS() { };
+            inlos.Update(runcontrol);
+            return inlos;           
+        }
+        public void Update(RunControl runcontrol)
+        {
+            VehiclesInLOS(runcontrol);
+            TargetsDamagedInLOS();
+            PedsInLOS();     
+        }
+
+        public void VehiclesInLOS(RunControl runcontrol)
+        {
+            vehicles = World.GetNearbyVehicles(runcontrol.camera.Position, 10000f).Where<Vehicle>(x => IsInLOS(x)).ToList();
+        }
+
+        public void TargetsDamagedInLOS()
+        {            
+            damaged_vehicles = new List<Vehicle>() { };
+            targets = new List<Target>() { };
+
+            if (vehicles.Count == 0) return;
+
+            int dam_counter = 0;
+
+            foreach (Vehicle vehicle in vehicles)
+            {
+                bool dam_check = Damage.DamageCheck(vehicle);
+                int dam_id = 0;
+
+                if (dam_check)
+                {
+                    dam_counter += 1;
+                    dam_id = dam_counter;
+                    damaged_vehicles.Add(vehicle);
+                }
+
+                Target target = Target.Setup(vehicle, dam_id);
+                targets.Add(target);
+            }             
+        }
+        public void PedsInLOS()
+        {
+            List<Ped> allpeds = World.GetAllPeds().Where<Ped>(x => IsInLOS(x)).ToList();
+            peds = allpeds.Select(x => PedSummary.Setup(x)).ToList<PedSummary>();
+        }
+        public static bool IsInLOS(Entity entity) => entity.IsOnScreen && !entity.IsOccluded && entity.IsVisible;
+    }
+
+    public class DamagedInstance 
+    {
+        public int id;                      // Damaged instance's ID
+        public DamagePosition dam_pos;      // Damage position
+        public static DamagedInstance Setup()
+        {
+            DamagedInstance instance = new DamagedInstance()
+            {
+                id = 0
+            };
+
+            return instance;
         }
     }
 }

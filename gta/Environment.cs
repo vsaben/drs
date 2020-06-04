@@ -10,11 +10,7 @@ using GTA.Math;
 namespace DRS
 {
     public class Environment
-    {
-        // 0: Properties ===================================================================================
-                    
-        public Vector3 baseposition;            // Drone base position         
-
+    {                    
         public TimeSpan gametime;               // In-game time
         public string weather;                  // Weather type
         public float rainlevel;                 // Level of rain
@@ -22,18 +18,21 @@ namespace DRS
         
         // 1: Setup =======================================================================================
 
-        public static Environment Setup(RunControl runcontrol)
+        public static Environment Setup(RunControl runcontrol, TestControl testcontrol)
         {
+            // Function - Output: Setup and output Environment instance
+
+            testcontrol.baseposition = SetRandomBasePosition(runcontrol);     // [a] Choose random drone base 
+
             Environment environment = new Environment
-            {
-                baseposition = SetBasePosition(runcontrol),                   // Set drone base location 
-                weather = SetWeather(runcontrol)                              // Randomise weather                                                                           
+            {                
+                weather = SetRandomWeather(runcontrol)                        // [b] Randomise weather                                                                           
             };
 
-            Game.Player.Character.Position = environment.baseposition;        // Move player (and camera) to the new base
-            SetTime(runcontrol);                                              // Randomise game time
+            Game.Player.Character.Position = testcontrol.baseposition;        // [c] Move player (and camera) to the new base
+            SetRandomTime(runcontrol);                                        // [d] Randomise game time
 
-            Script.Wait(3000);                                                // Allow game to load
+            Script.Wait(3000);                                                // [e] Allow game to load
 
             return environment;
         }
@@ -45,7 +44,7 @@ namespace DRS
             snowlevel = GetSnowLevel();
         }
 
-        // 2: Parameters ======================================================================================
+        // 2: Drone base locations ============================================================================
 
         public static IDictionary<string, Vector3> DroneBases = new Dictionary<string, Vector3>()
         {
@@ -74,29 +73,27 @@ namespace DRS
             {"Vespucci - Helipad", new Vector3(-736.750f, -1437.750f, 5.000f)}     
         };
 
-        public static Vector3 mainbaseposition = DroneBases.Values.ElementAt<Vector3>(0);
+        public static Vector3 MAINBASEPOSITION = DroneBases.Values.ElementAt<Vector3>(0);
 
-        // 3: Methods ===================================================================================
-        
-        /// A: Set
+        // 3: Environment Methods ===================================================================================
 
-        public static Vector3 SetBasePosition(RunControl runcontrol)
+        public static Vector3 SetRandomBasePosition(RunControl runcontrol)
         {
-            return DroneBases.Values.ElementAt<Vector3>(runcontrol.random.Next(DroneBases.Count));    
+            return DroneBases.Values.ElementAt<Vector3>(runcontrol.random.Next(DroneBases.Count));
         }
 
-        public static string SetWeather(RunControl runcontrol)
+        public static Array WEATHERS = Enum.GetValues(typeof(Weather));
+
+        public static string SetRandomWeather(RunControl runcontrol)
         {
-            Array weather_types = Enum.GetValues(typeof(Weather));
-            int weather_index = runcontrol.random.Next(weather_types.Length);
-            Weather res_weather = (Weather)weather_types.GetValue(weather_index);
-            string res_string = res_weather.ToString();
+            Weather res_weather = (Weather)WEATHERS.GetValue(runcontrol.random.Next(WEATHERS.Length));
             World.Weather = res_weather;
 
+            string res_string = res_weather.ToString();            
             return res_string;
         }
 
-        public static void SetTime(RunControl runcontrol)
+        public static void SetRandomTime(RunControl runcontrol)
         {
             Function.Call(Hash.SET_CLOCK_TIME,
                 runcontrol.random.Next(1, 24),
@@ -104,19 +101,11 @@ namespace DRS
                 runcontrol.random.Next(1, 60));
         }
 
-        /// B: Get
+        public static int GetRainLevel() => (int)(Function.Call<float>(Hash.GET_RAIN_LEVEL) * 100);
 
-        public static int GetRainLevel()
-        {
-            return (int)(Function.Call<float>(Hash.GET_RAIN_LEVEL) * 100);
-        }      
+        public static int GetSnowLevel() => (int)(Function.Call<float>(Hash.GET_SNOW_LEVEL) * 100);
 
-        public static int GetSnowLevel()
-        {
-            return (int)(Function.Call<float>(Hash.GET_SNOW_LEVEL) * 100);
-        }
-
-        // 4: DB (SQL) ================================================================================
+        // 4: Save environment information to SQL ==============================================================
 
         public static string[] db_environment_parameters =
         {
@@ -127,7 +116,7 @@ namespace DRS
             "GameTime"
         };
 
-        public static void ToDB(TestControl testcontrol, Environment environment, SqlConnection cnn)
+        public static void ToSQL(TestControl testcontrol, Environment environment, SqlConnection cnn)
         {
             string sql_environment = DB.SQLCommand("Environment", db_environment_parameters);
 
