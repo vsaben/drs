@@ -27,7 +27,7 @@ namespace DRS
                 bool inlos = EntitiesInLOS.IsInLOS(testcontrol.target_vehicle); // [b] Check if the target vehicle is in LOS
                 if (inlos)
                 {                   
-                    RotationOffset(runcontrol);                                 // [c] Adjust camera angle                                 
+                    RotationOffset(runcontrol, testcontrol);                    // [c] Adjust camera angle                                 
                     Script.Wait(2000);
                     return inlos;                                               // [d] Return true if target vehicle is in LOS    
                 }
@@ -100,8 +100,11 @@ namespace DRS
 
         /// B: Angle Offset
 
-        public static float FOV_MARGIN_PER = 0.4f;
-        public static void RotationOffset(RunControl runcontrol)
+        public static Dictionary<string, float> FOV_MARGIN_PER = new Dictionary<string, float>() {
+            {"Near", 0.4f },
+            {"Far", 0.2f}
+        };        
+        public static void RotationOffset(RunControl runcontrol, TestControl testcontrol)
         {
             // Function: Adjust yaw and pitch relative to the camera-to-vehicle rotation (Assume roll is level) 
             //           whilst maintaining view of the target vehicle
@@ -122,8 +125,10 @@ namespace DRS
 
             /// B: Rotation matrix adjustment 
 
-            float yaw_offset = RandomFOVOffset(runcontrol, hfov, FOV_MARGIN_PER);
-            float pitch_offset = RandomFOVOffset(runcontrol, vfov, FOV_MARGIN_PER);
+            float fov_margin_per = testcontrol.iswide ? FOV_MARGIN_PER["Far"] : FOV_MARGIN_PER["Near"]; 
+
+            float yaw_offset = RandomFOVOffset(runcontrol, hfov, fov_margin_per);
+            float pitch_offset = RandomFOVOffset(runcontrol, vfov, fov_margin_per);
             Vector3 rotationoffset = new Vector3(pitch_offset, 0f, yaw_offset);
 
             /// C: Adjust rotation matrix
