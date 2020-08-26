@@ -7,7 +7,6 @@ import tensorflow as tf
 
 from data import read_and_parse
 from _data_reformat import get_bb2d 
-from _data_targets import 
 
 # Description: Adapt gen_anchors.py for 
 #   (a) Use on custom data
@@ -27,8 +26,12 @@ def extract_wh(x, cpos, features, camera, environment):
     box_wh = bb2d[:, 2:4] - bb2d[:, :2] 
     return box_wh
 
-def extract_ndetect(x, cpos, features, camera, environment):
-    return tf.gather(tf.shape(cpos), 0)
+def extract_n(x, cpos, features, camera, environment):
+    N = tf.gather(tf.shape(features), 0)
+    
+    dams = features[:, 0]
+    ndam = tf.reduce_sum(dams)
+    return [N, ndam]   
 
 # B: Calculate kmeans anchors
 
@@ -127,15 +130,20 @@ def main(argv):
     ds_wh = ds.map(extract_wh)                                        # [width, height]
     box_wh = np.vstack(list(ds_wh))
 
-    ds_mb = ds.map(extract_ndetect)                                   # [N]
-    max_boxes = np.max(list(ds_mb))
+    ds_n = ds.map(extract_n)                                          # [N, ndam] # Modify: Can add truncation, occ dbn
+    arr_n = np.array(list(ds_n)) 
+    ndetect = int(np.sum(arr_n[:, 0]))
+    ndamaged = int(np.sum(arr_n[:, 1]))
+    max_boxes = int(np.max(arr_n[:, 0]))
 
     # B/C: Calculate mediod anchors and write to file
 
     output_path = os.path.join(args.output_dir, 'drs_anchors.txt')
 
     f = open(output_path, 'w')
-    f.write("Max Boxes: {:d}\n".format(max_boxes))
+    f.write("Number of Detections (damaged): {:d} ({:d})\n".format(ndetect, ndamaged))
+    f.write("Class Weighting (damaged): {:.4f}\n".format(ndamaged/ndetect))
+    f.write("Max Boxes: {:d}\n".format(max_boxes))    
     f.write("Size: {:d}\n".format(args.size))
 
     if args.num_clusters == 0:
