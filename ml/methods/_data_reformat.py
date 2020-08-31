@@ -1,40 +1,45 @@
-# Description: Supporting functions for reformatting data into a pre-yolo format
-# Function: 
-
-#  [1] Reformat y into y1, y2 
-
-#   A: y1 = [xmin, ymin, xmax, ymax, dam_int]
-#   B: y2 = [screen_x, screen_y, pos_Z, 
-#            dim_x, dim_y, dim_z, 
-#            quart_x, quart_y, quart_z, quart_w]    
-
-#  [2] Reformat features: vehicle class 
+"""
+    Description: Supporting functions for reformatting data into a pre-yolo format
+    Function: Format y and features  
+    - PART A: 3D-to-2D projection, 2D bounding boxes
+    - PART B: Screen co-ordinates, quarternions                
+    - PART C: Vehicle class encoding 
+"""
 
 import tensorflow as tf
-
 import math
-pi = tf.constant(math.pi)
 
+pi = tf.constant(math.pi)
 _false = tf.constant(False, dtype=tf.bool)
 _true = tf.constant(True, dtype=tf.bool)
 
-# 1A: Y1 ------------------------------------------------------------------------------
+# PART A ==================================================================================
 
 def compute_bb3d(camera, cpos_elem):
-        
-    # > Target rotation
+    
+    """Computes 2D normalised screen co-ordinates of a vehicle's 3D bounding box vertices
+    
+    :param camera: camera property dictionary 
+    :param cpos_elem: 9-element vector = [pos_x, pos_y, pos_z, 
+                                          dim_x, dim_y, dim_z,
+                                          rot_x, rot_y, rot_z]
+
+    :return: (9, 2) array, where each row specifies (x, y) normalised coordinates    
+    """
+
+    # Target rotation
     
     cpos_elem_8 = get_rel_yaw(camera['R'], camera["yaw"], cpos_elem[8], _false)
     tar_cam_rot = tf.stack([cpos_elem[6], cpos_elem[7], cpos_elem_8])   
     R_tar = create_rot(tar_cam_rot)
 
-    # > Corner dimensions
+    # Corner dimensions
 
     dims = cpos_elem[3:6]
     corner_dims = get_corner_dim(dims)
     corner_dims = tf.transpose(corner_dims)
     
-    # > Camera coordinates [Rotated corners + vehicle center]
+    # Camera coordinates [Rotated corners + vehicle center]
     
     oriented_corners = tf.cast(tf.matmul(R_tar, corner_dims), tf.float64) 
     center = tf.cast(cpos_elem[:3], tf.float64)                           
@@ -42,11 +47,22 @@ def compute_bb3d(camera, cpos_elem):
     corner_cam = tf.transpose(tf.matmul(tf.transpose(camera['R']), oriented_corners)) + center     
     return tf.map_fn(lambda cw: C2S(camera, cw), corner_cam, dtype = tf.int16, parallel_iterations=8)    
 
-
-# i: Target rotation
-
 @tf.function
 def get_rel_yaw(cam_R, cam_yaw, tar_yaw, is_tar_to_cam):
+
+    """Converts absolute gta-extracted vehicle yaw relative to the camera yaw, and vice versa    
+    :note: camera zero-yaw axis is determined by the up/down orientation of its vertical axis
+    :note: camera yaw is harmonised to ensure yaw is always defined relative to an upward-facing
+           vertical axis
+
+    :param cam_R: camera rotation matrix
+    :param cam_yaw: absolute camera yaw
+    :param tar_yaw: absolute vehicle yaw
+    :param is_tar_to_cam: boolen specifying target-to-camera conversion direction
+
+    :return: converted vehicle yaw
+    """
+
     dir_yaw = tf.greater(cam_R[2, 1], 0)                          
     if is_tar_to_cam:            
         adj_yaw = realign_rad(tar_yaw - cam_yaw)
@@ -57,6 +73,15 @@ def get_rel_yaw(cam_R, cam_yaw, tar_yaw, is_tar_to_cam):
     return adj_yaw
  
 def realign_yaw(theta, is_tar_to_cam):
+
+    """Harmonises relative yaw measures by reorienting the camera's vertical axis upward (flip), 
+    and vice versa, depending on the target-to-camera conversion direction
+
+    :param theta: vehicle's relative yaw
+    :param is_tar_to_cam: boolean specifying the target-to-camera conversion direction
+
+    :result: float tensor 
+    """
 
     f = tf.cond(is_tar_to_cam, lambda: pi, lambda: -pi)
     
@@ -69,6 +94,14 @@ def realign_yaw(theta, is_tar_to_cam):
     return theta                                                                   
 
 def realign_rad(rad):
+
+    """Simplifies radian values to their equivalent value between -pi and pi
+    
+    :param rad: input radian value
+
+    :result: radian constant float tensor between -pi and pi 
+    """
+
     within_b = tf.logical_and(tf.greater_equal(rad, -pi), tf.less_equal(rad, pi))
     break_lb = tf.logical_and(tf.less(rad, -pi), tf.greater_equal(rad, -2*pi))
     break_ub = tf.logical_and(tf.greater(rad, pi), tf.less_equal(rad, 2*pi))
@@ -81,6 +114,19 @@ def realign_rad(rad):
 
 
 def create_rot(euler):
+
+    """Creates a rotation matrix from euler/tait-bryan angles
+    :note: Z-X'-Y'' intrinsic rotation OR YXZ extrinsic rotation
+    :note: right-multiplication of the transposed rotation 
+           matrix generates the required rotation order
+
+    :param euler: euler/tait-bryan angles
+                  x = pitch (pi < x < 0) 
+                  y = roll (-pi < y < pi)
+                  z = yaw (-pi < z < pi)
+    
+    :result: (3, 3) rotation matrix
+    """
 
     x, y, z = euler[0], euler[1], euler[2]
 
@@ -97,9 +143,16 @@ def create_rot(euler):
     R = Rz * Rx * Ry
     return R
 
-# ii: Corner dimensions 
+def get_corner_dim(dims):  
+    
+    """Calculates each 3D bounding box vertex's center offset
 
-def get_corner_dim(dims):     
+    :param dims: half-width (x), length (y) and height (z) dimensions from
+                 a vehicle's center point
+
+    :return: (8, 3) array, where each row specifies a different vertex's center offset 
+    """
+
     x, y, z = dims[0], dims[1], dims[2]
     corner_dims = tf.cast([[-x, y, z],     # ftl  
                            [x, y, z],      # ftr    
@@ -112,10 +165,15 @@ def get_corner_dim(dims):
                            dtype=tf.float32)    
     return corner_dims
 
-
-# iii: Camera co-ordinates
-
 def C2S(camera, cw):
+
+    """Converts co-ordinates in camera space to screen space
+
+    :param camera: camera property dictionary
+    :param cw: co-ordinate in camera space
+
+    :return: (x, y) integer screen co-ordinate tensor
+    """
 
     cw = tf.cast(cw, tf.float32)
 
@@ -129,10 +187,19 @@ def C2S(camera, cw):
     sw = tf.cast(sw, tf.int16)
     return sw
 
-# iv: Get 2D BB
-
 @tf.function
 def compute_bb2d(camera, cpos_elem):
+
+    """Computes normalised, clipped 2D bounding box from a vehicle's projected 3D 
+    bounding box vertices
+    
+    :param camera: camera property dictionary
+    :param cpos_elem: 9-element vector = [pos_x, pos_y, pos_z, 
+                                          dim_x, dim_y, dim_z,
+                                          rot_x, rot_y, rot_z]
+
+    :return: (xmin, ymin, xmax, ymax) normalised tensor
+    """
 
     bb3d = compute_bb3d(camera, cpos_elem)
     x_vals = bb3d[:, 0]
@@ -160,16 +227,32 @@ def compute_bb2d(camera, cpos_elem):
 
 def get_bb2d(camera, cpos):
 
-    # Output: xmin, ymin, xmax, ymax (row-wise)
+    """Group: Calculates all vehicles wide 2D bounding box
+    
+    :note: a wide 2D bbox encapsulates projected 3D bbox vertices
+
+    :param camera: camera property dictionary
+    :param cpos: collated position, dimension and rotation information
+                 for all detections in an image
+
+    :result: (ndetections, [xmin, ymin, xmax, ymax]) normalised 2D co-ordinates
+    """
 
     bb2d = tf.map_fn(lambda x: compute_bb2d(camera, x), cpos, dtype = tf.float32)
     return tf.transpose(bb2d)
 
-# 1B: Y2 ----------------------------------------------------------------------------------
+# PART B =========================================================================
 
 def get_screen_center(camera, cpos):
     
-    # Output: standardised screen_x, screen_y (row-wise)
+    """Group: Calculates all vehicle center points within an image
+
+    :param camera: camera property dictionary
+    :param cpos: collated position, dimension and rotation information
+                 for all detections in an image
+
+    :return: (ndetections, [x, y]) normalised 2D co-ordinates
+    """
 
     center = tf.map_fn(lambda x: C2S(camera, x[:3]), cpos, dtype = tf.int16)
     norm = tf.expand_dims(tf.stack([camera['w'] - 1, camera['h'] - 1]), axis=-1)  
@@ -178,8 +261,14 @@ def get_screen_center(camera, cpos):
 
 def get_quart(cpos):
 
-    # Output: quart_x, quart_y, quart_z, quart_w (row-wise)
+    """Group: Converts euler vehicle rotations to equivalent quarternion representations
+    
+    :param cpos: collated position, dimension and rotation information
+                 for all detections in an image
 
+    :result: (ndetections, [qx, qy, qz, qw])
+    """
+    
     euler = cpos[:, 6:]
     quart = tf.map_fn(euler_to_quart, euler, tf.float32)
     quart = tf.transpose(quart)    
@@ -187,11 +276,15 @@ def get_quart(cpos):
 
 def euler_to_quart(euler):
 
-    # Assume: Z-X'-Y'' intrinsic rotation <> YXZ extrinsic rotation
-    # Rotation: pitch [pi < x < 0], roll [-pi < y < pi], yaw [-pi < z < pi]
-    #           Characterised by unit quaternion
+    """Converts euler/tait-bryan angles to an equivalent quarternion representation
+    :note: Z-X'-Y'' intrinsic rotation OR YXZ extrinsic rotation
+    :note: rotation charcterised by unit quarternions
     
+    :param euler: euler/tait-bryan angles corresponding to pitch, roll and yaw
 
+    :result: (qx, qy, qz, qw)
+    """
+    
     hp = 0.5 * euler[0]
     hr = 0.5 * euler[1]
     hy = 0.5 * euler[2] 
@@ -210,8 +303,14 @@ def euler_to_quart(euler):
 @tf.function
 def quart_to_euler(q):
 
-    # Creates R and extracts corresponding euler
-    # Convention: YXZ [Refer NASA, three.js]
+    """Converts a quarternion to an euler/tait-bryan angle representation
+    :note: Z-X'-Y'' intrinsic rotation OR YXZ extrinsic rotation
+    :note: extracts euler from a quarternion-generated rotation matrix
+
+    :param q: (qx, qy, qz, qw) quarternion
+
+    :result: euler (pitch, roll, yaw) representation
+    """
 
     qx, qy, qz, qw = q[0], q[1], q[2], q[3]
 
@@ -232,7 +331,7 @@ def quart_to_euler(q):
 
     return tf.stack([x, y, z])
 
-# 2A: Features --------------------------------------------------------------
+# PART C ======================================================================== 
 
 #VEHICLE_CLASSES = {0:'Commercial',
 #                   1:'Compacts', 
@@ -278,4 +377,8 @@ vehicle_table = tf.lookup.StaticHashTable(
 )
 
 def get_vehicle_classes(ex_cls):
+    """Encodes vehicle class with an assigned, unique integer 
+    :param ex_cls: vehicle class string    
+    :result: assigned vehicle class integer
+    """
     return vehicle_table.lookup(ex_cls)
