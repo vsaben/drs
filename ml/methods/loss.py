@@ -1,19 +1,187 @@
-# Description: Loss function control
-# Function: Loss
-#   A. 2D BB (x, y, w, h)
-#   B. Position
-#   C. Dimensions 
-#   D. Rotation 
+"""
+    Description: Loss function control
+    Function: 
+    - PART A: Backbone (x, y, w, h, dam_cls)
+    - PART B: Pose (cx, cy             [center | bbox]
+                    posz               [center depth]
+                    dimx, dimy, dimz,  [dimensions | anchor]
+                    qx, qy, qz, qw)    [rotation]
+    - PART C: Object detection (x, y, w, h, P(Damage))    
+"""
 
 import tensorflow as tf
-
-from methods._models_yolo_head import Boxes
 from tensorflow.keras.losses import (
     binary_crossentropy,
     sparse_categorical_crossentropy
 )
-from .utils import broadcast_iou
+from methods.utils import broadcast_iou
+from methods._models_yolo import extract_anchors_masks
 
+import tensorflow.keras as K 
+import tensorflow.keras.layers as KL 
+
+# PART A: Backbone ======================================================================
+
+def compute_rpn_losses(pd_boxes, gt_boxes, cfg):
+
+    """Calculate RPN loss incl. metric components
+    
+    :param pd_boxes: 
+    :param gt_boxes: [grid_s, grid_m, grid_l] | [grid_m, grid_l]
+    :param cfg: base configuration settings
+
+    :result: batch rpn loss
+    """
+
+    _anchors, masks = extract_anchors_masks(cfg.YOLO)
+
+    losses = []
+    for i, pbox in enumerate(pd_boxes):
+        anchors = _anchors[masks[i]]
+        loss = single_layer_yolo_loss(pbox, gt_boxes[i], anchors, i, cfg)       
+        losses.append(loss) 
+
+    return tf.stack(losses, axis=1)                 # [nbatch, nlevels, nlosses]
+    
+def single_layer_yolo_loss(pbox, gbox, anchors, level, cfg):
+
+    # 1: Transform predicted boxes [nbatch, grid, grid, anchors, (x, y, w, h, obj, .. cls)] 
+
+    pd_box, pd_obj, pd_cls, pd_xywh = pbox
+    pd_xy = pd_xywh[..., 0:2]
+    pd_wh = pd_xywh[..., 2:4]
+
+    # 2: Transform ground truth boxes [nbatch, grid, grid, anchors, (x1, y1, x2, y2, obj, .. cls, .. features)]
+
+    gt_box, gt_obj, gt_cls, gt_pose = tf.split(gbox, (4, 1, 1, 10), axis=-1)   
+
+    gt_xy = (gt_box[..., 0:2] + gt_box[..., 2:4]) / 2
+    gt_wh = gt_box[..., 2:4] - gt_box[..., 0:2]
+
+    # 3: Give a higher weighting to smaller boxes [ADJUST]
+        
+    box_loss_scale = 2 - gt_wh[..., 0] * gt_wh[..., 1]
+
+    # 4: Recollect ground truth bbox in image coordinates 
+    
+    grid_size = tf.shape(gbox)[1]
+    grid = tf.meshgrid(tf.range(grid_size), tf.range(grid_size))
+    grid = tf.expand_dims(tf.stack(grid, axis=-1), axis=2)
+        
+    gt_xy = gt_xy * tf.cast(grid_size, tf.float32) - tf.cast(grid, tf.float32)
+    gt_wh = tf.math.log(gt_wh / anchors)
+    gt_wh = tf.where(tf.math.is_inf(gt_wh), tf.zeros_like(gt_wh), gt_wh)
+
+    # 5: Calculate masks
+
+    obj_mask = tf.squeeze(gt_obj, -1)
+
+    best_iou = tf.map_fn(lambda x: 
+                            tf.reduce_max(                                                      # Ignore FP when iou > threshold
+                                broadcast_iou(
+                                    x[0], 
+                                    tf.boolean_mask(x[1], tf.cast(x[2], tf.bool))), axis=-1),
+                            (pd_box, gt_box, obj_mask), tf.float32) 
+
+    ignore_mask = tf.cast(best_iou < cfg.RPN_IOU_THRESHOLD, tf.float32)
+
+    # 6: Calculate losses [nbatch, gridx, gridy, anchors]
+
+    xy_loss = obj_mask * box_loss_scale * tf.reduce_sum(tf.square(gt_xy - pd_xy), axis=-1)
+    wh_loss = obj_mask * box_loss_scale * tf.reduce_sum(tf.square(gt_wh - pd_wh), axis=-1)
+
+    obj_entropy = binary_crossentropy(y_true=gt_obj, y_pred=pd_obj)
+    objcf_loss = obj_mask * obj_entropy
+    nobjcf_loss = (1 - obj_mask) * ignore_mask * obj_entropy       
+    obj_loss = objcf_loss + nobjcf_loss        
+        
+    class_loss = obj_mask * sparse_categorical_crossentropy(y_true=gt_cls, y_pred=pd_cls)   
+    
+    sublosses = [xy_loss, wh_loss, obj_loss, class_loss, objcf_loss, nobjcf_loss]
+
+    # 6. Sum losses over grid [nbatch, 1]
+
+    reduced_losses = []
+    for lss in sublosses:
+        subloss = tf.reduce_sum(lss, axis = (1, 2, 3))
+        reduced_losses.append(subloss)
+     
+    return tf.stack(reduced_losses, axis=1) # [nbatch, 1, 6]
+
+# PART B: Pose ========================================================================
+
+def compute_pose_losses(pd_pose, gt_pose, cfg):
+
+    pd_center, pd_depth, pd_dims, pd_quart = tf.split(pd_pose, (2, 1, 3, 4), axis = -1)                  # [nbatch, ndetect, 10]  
+    gt_center, gt_depth, gt_dims, gt_quart = tf.split(gt_pose, (2, 1, 3, 4), axis = -1)                  # [nbatch, ndetect, 10]
+
+    center_loss = pose_center_loss(pd_center, gt_center)
+    depth_loss = pose_depth_loss(pd_depth, gt_depth, cfg) # cfg added to allow for different functions to be used
+    dim_loss = pose_dim_loss(pd_dims, gt_dims)
+    quart_loss = pose_quart_loss(pd_quart, gt_quart, cfg)
+
+    sublosses = [center_loss, depth_loss, dim_loss, quart_loss]     
+    return tf.stack(sublosses)
+
+# Center
+
+def pose_center_loss(pd_center, gt_center):
+    # ADJUST: gt scaling    
+    square_loss = tf.square(pd_center - gt_center)               # [nbatch, ndetect, 2]
+    sum_loss = tf.reduce_sum(square_loss, axis = -1)             # [nbatch, ndetect]   
+    return tf.reduce_mean(sum_loss)                              # [1]
+
+# Depth
+
+def pose_depth_loss(pd_depth, gt_depth, cfg):
+    # ADJUST: least square adversial (depth loss)
+    square_loss = tf.square(pd_depth - gt_depth)                 # [nbatch, ndetect, 1]
+    return tf.reduce_mean(square_loss)                           # [1]
+
+# Dimension
+
+def pose_dim_loss(pd_dims, gt_dims):
+    # ADJUST: Dimension loss scaling (like bbox)
+    # ADJUST: View x, y, z dim losses
+
+    square_loss = tf.square(pd_dims - gt_dims)                   # [nbatch, ndetect, 3]
+    sum_loss = tf.reduce_sum(square_loss, axis = -1)             # [nbatch, ndetect]
+    return tf.reduce_mean(sum_loss)                              # [1]
+
+# Rotation
+
+def pose_quart_loss(pd_quart, gt_quart, cfg):
+    
+    # ADJUST: Add other rotation loss functions
+    # 6D-VNet: End-to-end 6DoF Vehicle Pose Estimation from Monocular RGB Images ||q - qhat / ||qhat|| ||1
+
+    sum_loss = tf.norm(gt_quart - pd_quart / tf.norm(pd_quart, axis = -1, keepdims=True), ord = 1, axis = -1) # [nbatch, ndetect]
+    return tf.reduce_mean(sum_loss)                                                                           # [1]
+ 
+# PART C: Object Detection ========================================================================
+
+#if cfg.ADD_POSE_OD:
+    #    bbox_loss = pose_bbox_loss(pd_bbox, gt_bbox)
+    #    class_loss = pose_class_loss(pd_class, gt_class)
+    #    sublosses += [bbox_loss, class_loss]
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+"""
 def YoloComponentLoss(anchors, ind = 0, ignore_thresh=0.5):
     def yolo_loss(y_true, y_pred):
 
@@ -81,17 +249,7 @@ def YoloComponentLoss(anchors, ind = 0, ignore_thresh=0.5):
         return losses[ind]
     return yolo_loss
 
-def Loss(anchors, setting = 'total', ignore_thresh = 0.5):
-    ind = LOSS_TABLE[setting]
-    return YoloComponentLoss(anchors, ind, ignore_thresh)
 
-LOSS_TABLE = {'total': 0,
-              'xy': 1,
-              'wh': 2, 
-              'obj': 3,
-              'obj_pos': 4, 
-              'obj_neg': 5, 
-              'class': 6}
 
 def loss_dict(cfg_mod, ignore_thresh, isloss=True):
     
@@ -120,5 +278,4 @@ def val_metric(anchors, mask, ignore_thresh):
         res_list.append(fn)
 
     return res_list
-
-# metrics = [xy_loss, wh_loss, obj_loss, obj_loss_conf, noobj_loss_conf, class_loss]
+"""
