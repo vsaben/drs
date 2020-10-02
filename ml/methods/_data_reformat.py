@@ -333,46 +333,65 @@ def quart_to_euler(q):
 
 # PART C ======================================================================== 
 
-#VEHICLE_CLASSES = {0:'Commercial',
-#                   1:'Compacts', 
-#                   2:'Coupes',
-#                   3:'Cycles', 
-#                   4:'Emergency', 
-#                   5:'Industrial', 
-#                   6:'Motorcycles', 
-#                   7:'Muscle', 
-#                   8:'Offroad',
-#                   9:'Sedans', 
-#                   10:'Service', 
-#                   11:'Sports', 
-#                   12:'SportsClassics', 
-#                   13:'Super', 
-#                   14:'SUVs', 
-#                   15:'Utility', 
-#                   16:'Vans'}
+WEATHER_CLASSES = {0:'Blizzard', 
+                   1:'Christmas', 
+                   2:'Clear', 
+                   3:'Clearing', 
+                   4:'Clouds', 
+                   5:'Extra Sunny', 
+                   6:'Foggy', 
+                   7:'Haloween', 
+                   8:'Neutral', 
+                   9:'Overcast', 
+                   10:'Raining', 
+                   11:'Smog', 
+                   12:'Snowing', 
+                   13:'Snowlight', 
+                   14:'Thunderstorm',
+                   15:'Other'}
+
+weather_table = tf.lookup.StaticHashTable(
+    initializer=tf.lookup.KeyValueTensorInitializer(
+        keys=tf.constant(list(WEATHER_CLASSES.values())),
+       values=tf.range(len(WEATHER_CLASSES), dtype=tf.int32),
+    ),
+    default_value=tf.constant(len(WEATHER_CLASSES) - 1, tf.int32),
+    name="weather_class"
+)
+
+def get_weather_classes(ex_cls):
+    """Encodes weather class with an assigned, unique integer 
+    :param ex_cls: weather class string    
+    :result: assigned weather class integer
+    """
+    return weather_table.lookup(ex_cls)
+
+
+VEHICLE_CLASSES = {0:'Commercial',
+                   1:'Compacts', 
+                   2:'Coupes',
+                   3:'Cycles', 
+                   4:'Emergency', 
+                   5:'Industrial', 
+                   6:'Motorcycles', 
+                   7:'Muscle', 
+                   8:'Offroad',
+                   9:'Sedans', 
+                   10:'Service', 
+                   11:'Sports', 
+                   12:'SportsClassics', 
+                   13:'Super', 
+                   14:'SUVs', 
+                   15:'Utility', 
+                   16:'Vans', 
+                   17: 'Other'}
 
 vehicle_table = tf.lookup.StaticHashTable(
     initializer=tf.lookup.KeyValueTensorInitializer(
-        keys=tf.constant(['Commercial',
-                          'Compacts', 
-                          'Coupes',
-                          'Cycles', 
-                          'Emergency', 
-                          'Industrial', 
-                          'Motorcycles', 
-                          'Muscle', 
-                          'Offroad',
-                          'Sedans', 
-                          'Service', 
-                          'Sports', 
-                          'SportsClassics', 
-                          'Super', 
-                          'SUVs', 
-                          'Utility', 
-                          'Vans']),
-       values=tf.range(0, 17, dtype=tf.float32),
+        keys=tf.constant(list(VEHICLE_CLASSES.values())),
+       values=tf.range(len(VEHICLE_CLASSES), dtype=tf.float32),
     ),
-    default_value=tf.constant(-1, tf.float32),
+    default_value=tf.constant(len(VEHICLE_CLASSES) - 1, tf.float32),
     name="vehicle_class"
 )
 
