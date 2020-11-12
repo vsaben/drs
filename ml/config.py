@@ -10,6 +10,7 @@
 
 import os
 import json
+import numpy as np
 import tensorflow as tf
 
 # Adaptation of Mask RCNN repo config file: https://github.com/matterport/Mask_RCNN
@@ -22,54 +23,90 @@ class Config(object):
     where needed.
     """
 
+    # Model name. All logs, checkpoints and other model-specific outputs are stored 
+    #   in a created model directory of the same name.
+
     NAME = None
+
+    BEST_VAL_LOSS = None
+
+    TRAIN_SESSIONS = 0
 
     """A: Image ================================================================="""
     
     # Target, square, resized colour image dimensions. Must be divisible by 32 in 
-    #    Yolo backbone. Colour images contain 3 channels. [PI]
+    #    Yolo backbone. Colour images contain 3 channels. Increasing target image 
+    #    dimensions favours accuracy (i.e. improves feature resolution) in the 
+    #    speed-accuracy trade-off. [PI]
     
-    CHANNELS    = 3
-    IMAGE_SIZE  = 416
+    CHANNELS = 3
+    IMAGE_SIZE = 416
     
     """B: Training\Inference ===================================================="""
 
-    BATCH_SIZE  = 2
+    # Batch size balances error gradient accuracy against convergence speed. While 
+    #   larger batches enhance error gradient estimations, convergence is slower 
+    #   (and vice versa). Limited here by GPU memory constraints.   
+
+    BATCH_SIZE = 32
    
+    # Shuffle buffer size. Affects the randomness in order to which instances are 
+    #   selected and batched. Let b = buffer size. An instance is drawn from a 
+    #   pseudo-randomly selected subset of b instances. The next item then replaces 
+    #   the selected instance. 3 scenarios persist:
+    #   i. b < len(data) --> data not fully randomised / smaller memory overhead
+    #   ii. b >= len(data) --> data fully shuffled / large memory overhead
+    #   iii. b = 1 --> no shuffling
+    #   A "sufficiently large" buffer size is selected to maximise data order 
+    #   randomness whilst considering memory constraints. 
+
     BUFFER_SIZE = 1000
 
-    EPOCHS      = 2
+    # Number of training iterations through the full dataset. Early stopping 
+    #   permitted via the early stopping keras callback. Total epochs stored for 
+    #   to combine tensorboard summaries via a step parameter.   
 
-    # Specifies whether an exploratory data analysis is conducted. If True: 
-    #   MAX_GT_INSTANCES = 2 * maximum boxes observed in the training data
-    #   Yolo's default ANCHORS_6 and ANCHORS_9 are updated. A results 
-    #   exploratory.txt file is written to the data directory. Only conducted upon 
-    #   a model's initial creation.
+    EPOCHS = 2
+
+    TOTAL_EPOCHS = 0
+
+    # Specifies if an exploratory data analysis is conducted. If true, the analyis 
+    #   is performed upon a model's initial creation. The following attributes are 
+    #   updated in the configuration file:
+    #   > MAX_GT_INSTANCES = 2 * maximum boxes observed in the training data
+    #   > ANCHORS
+    #   > DIM_ANCHOR 
+    #   More detailed data characteristics are written to 'exploratory.txt' in the 
+    #   data directory.  
  
-    EXPLORE_DATA = False
+    EXPLORE_DATA = True
 
     # Applies a horizontal flip augmentation to each image. Doubles the effective 
     #    dataset size. 
 
-    ISAUGMENT   = True
+    ISAUGMENT = True
 
-    # "The Mask RCNN paper uses lr=0.02, but on TensorFlow it causes weights to 
-    #   explode. Likely due to differences in optimizer implementation". Reduced 
-    #   upon plateau using the associated keras callback. 
+    # Gradient error scaling factor. "The Mask RCNN paper uses lr=0.02, but on 
+    #   TensorFlow it causes weights to explode. Likely due to differences in 
+    #   optimizer implementation". Reduced upon plateau using the associated keras 
+    #   callback.  
 
-    LR_INIT     = 1e-3
-    LR_END      = 1e-6
+    LR_INIT = 1e-3
+    LR_END = 1e-6
 
     # Train or freeze batch normalization layers. Poor training implications 
     #   where batch size is small. 
 
-    TRAIN_BN    = False
+    TRAIN_BN    = True
     
-    # Loss components and weights.
+    # Loss components and weights. Component weighting focuses model performance. 
+    #   All components are provided as metrics. RPN metrics account for all 
+    #   level-type pairs. The number of RPN level losses measured depends on the
+    #   backbone's number of output layers.
 
     LOSSES = {
-        'rpn_loss': 1., 
-        'pose_loss': 1. 
+        'rpn_loss':        1., 
+        'pose_loss':       1.
         #'mask_loss': 1.
         }
 
@@ -83,9 +120,9 @@ class Config(object):
         }
 
     RPN_LVL_LOSSES = {
+        'rpn_lvl_0_loss':   1., 
         'rpn_lvl_1_loss':   1., 
-        'rpn_lvl_2_loss':   1., 
-        'rpn_lvl_3_loss':   1.
+        'rpn_lvl_2_loss':   1.
         }
 
     POSE_SUBLOSSES = {
@@ -95,28 +132,43 @@ class Config(object):
         'pose_quart_loss': 1.
         }
 
-    #OD_SUBLOSSES = {
-    #   'od_bbox_loss':  1., 
-    #   'od_class_loss': 1.
-    #    }
-
-    # L2 regularization. Applied after model build.
+    # L2 regularisation factor. Applied after model build.
         
     WEIGHT_DECAY = 0.0001
 
-    # Metrics stored in addition to loss components (see above). RPN losses are 
-    #   recorded per output level.
+    # Metrics stored in addition to loss components (see above).
 
     METRICS = {}
 
+    # Class weighting accounts for the distribution imbalance of damaged to undamaged 
+    #  vehicle instances in the data. Damaged vehicles are less frequent. Class losses 
+    #  are weighted to ensure classification decisions rely on features, as opposed to 
+    #  class modality. Focal loss is chosen. This is empirically shown to improve model
+    #  performance on autonomous vehicle datasets: "Resolving Class Imbalance in Object 
+    #  Detection with Weighted Cross Entropy Losses". w = (1 - P(i))^a where 
+    #   a = hyperparameter
+    #   P(i) = class propensity
+    #  Smaller classes are weighted higher, thereby focusing model performance on their 
+    #  accurate classification. Updated in exploratory data analysis. Additional 
+    #  investigation is left for future research. [PI] 
+
+    DAMAGED_RATIO = 0.2115
+    
+    FOCAL_LOSS_ALPHA = 1
 
     """C: Backbone =============================================================="""
 
-    # Backbone network architecture. Supported architectures include "yolov3", 
-    #    "yolov3t", "yolov4" and "yolov4". Architecture-specific default properties
+    ANCHORS = None
+
+    DEFAULT_YOLO_WEIGHT_PATH = None
+
+    MASKS = None
+
+    # Backbone network architecture. Supported architectures include "YoloV3", 
+    #    "YoloV3T", "YoloV4" and "YoloV4T". Architecture-specific default properties
     #    are stored in the Yolo class.
     
-    BACKBONE = 'yolov3'
+    BACKBONE = 'YoloV3'
 
     # Percentage of Darknet convolutional layers that are trainable (from head to back). 
     #   This prevents unnecessary, computationally-expensive coarse feature relearning 
@@ -124,11 +176,10 @@ class Config(object):
 
     PER_DARKNET_UNFROZEN = 0.2
 
-    # Non-max suppression threshold to filter RPN proposals. Increase during training 
+    # Non-max suppression thresholds to filter RPN proposals. Increase during training 
     #   to generate more valid proposals (if USE_RPN_ROI = True).
 
     RPN_IOU_THRESHOLD = 0.5
-
     RPN_SCORE_THRESHOLD = 0.5
 
     # Use RPN-generated ROIs OR ground-truth ROI during training. 
@@ -137,10 +188,10 @@ class Config(object):
    
     USE_RPN_ROI = False
 
-    # Maximum number of ground truth detections to include in a single image during training. 
-    #   Set above the maximum number of detections observed in training images 
-    #   (with margin). Calculated in exploratory data analysis (see _data_anchors.py).
-    #   Permits batching through padding. 
+    # Maximum number of ground truth detections to include in a single image during 
+    #   training. Set above the maximum number of detections observed in training 
+    #   images (with margin). Calculated in exploratory data analysis 
+    #   (see EXPLORE_DATA). Permits batching through padding. 
 
     MAX_GT_INSTANCES = 40     
     
@@ -148,16 +199,18 @@ class Config(object):
 
     NUM_CLASSES = 2
 
+    CLASSES = ['undamaged', 'damaged']
+
     """D: Head ================================================================="""
 
-    # Feature pyramid feature map depth.
+    # Feature pyramid feature map depth. Manages model size.
 
     TOP_DOWN_PYRAMID_SIZE = 256
 
     # ROI pooling size    
 
     POOL_SIZE = 7
-    MASK_POOL_SIZE = 14
+    #MASK_POOL_SIZE = 14
 
 
 
@@ -166,17 +219,22 @@ class Config(object):
     # Defines dimension measurements relative to the training set's median observed 
     #   vehicle dimensions. Recollected in the final layer. Set once per model. 
 
-    USE_DIM_ANCHORS = False
+    USE_DIM_ANCHOR = True
+    DIM_ANCHOR = [0.9889339804649353, 2.4384219646453857, 0.7416530251502991]
 
-    USE_DEFAULT_ANCHORS = True
+    USE_DEFAULT_ANCHORS = False
 
-    # Add a bbox and class refinement head module / Separate od from pose
+    """E: Optimisation ========================================================="""
 
-    ADD_POSE_OD = False
+    # Quantisation prunes weights by reducing their float precision. Options: 
+    #   ['none', 'aware', 'post', 'both']
+
+    QUANTISATION = 'none'
 
     
 
-    """E: Detection ============================================================"""
+
+    """F: Detection ============================================================"""
     
     # Maximum number of possible detections in a single image. See MAX_GT_INSTANCES.
     
@@ -185,10 +243,6 @@ class Config(object):
     DETECTION_SCORE_THRESHOLD = 0.7
 
     DETECTION_IOU_THRESHOLD = 0.7
-
-
-    
-
 
 
     # Number of training steps per epoch
@@ -243,28 +297,34 @@ class Config(object):
     # Gradient norm clipping
     #GRADIENT_CLIP_NORM = 5.0
 
-    def __init__(self):
-        pass
-
-    def save(self, ckpt_dir):
+    def save(self):
         
         """Save configuration attributes (excl. YOLO) to .json file
         
         :param ckpt_dir: general model saving directory
         :param name: model/test name
         
-        :result: configuration attributes (excl. YOLO) stored in config.json
+        :result: configuration attributes stored in config.json
         """
 
-        attrs = [attr for attr in dir(self) if is_attr_of_interest(self, attr)] 
-        attr_dict = getattrs(self, attrs)
+        if not os.path.isdir(self.MODEL_DIR): 
+            os.mkdir(self.MODEL_DIR)
 
-        file_name = os.path.join(ckpt_dir, self.NAME, "config.json")
+        file_name = os.path.join(self.MODEL_DIR, "config.json")        
         with open(file_name, 'w') as f:
-            json.dump(attr_dict, f, sort_keys=True, indent=4)       
-
-    def restore(self, model_dir):
-        pass
+            json.dump(self.__dict__, f, sort_keys=True, indent=4)  
+            
+    def restore(model_dir):
+        file_name = os.path.join(model_dir, "config.json")
+        with open(file_name, 'r') as f:
+            cfg_dict = json.load(f)
+        
+        cfg = Config()
+        
+        for k, v in cfg_dict.items():
+            setattr(cfg, k, v)
+       
+        return cfg 
 
     def display(self):
         
@@ -272,47 +332,52 @@ class Config(object):
         
         print("\nConfigurations:")
         for attr in dir(self):
-            if is_attr_of_interest(self, attr): 
-                if attr == 'YOLO':
-                    print("\n")
-                    self.YOLO.display()
-                    print("\n")
-                else:
-                    print("{:30} {}".format(attr, getattr(self, attr)))
+            if attr.isupper(): 
+                print("{:30} {}".format(attr, getattr(self, attr)))
         print("\n")
 
+    def to_dict(self):
+        return {attr: getattr(self, attr) for attr in dir(self) if attr.isupper()}
 
-class Yolo(object):               
-    MASKS       = tf.constant([[6, 7, 8], [3, 4, 5], [0, 1, 2]], tf.int32)              # Sequential layers (3) are responsible for predicting masks of decreasing size 
-    DIM_ANCHOR  = tf.constant([0.9889339804649353, 2.4384219646453857, 0.7416530251502991], tf.float32)
+    def strip(self):
 
-    ANCHORS_9 = tf.constant([(1, 8),(2, 8),(2, 2),(6, 26),(7, 10),(11, 16),(18, 20),(24, 44),(68, 134)], tf.float32) / 416
-    ANCHORS_6 = tf.constant([(2, 7),(8, 13),(17, 19),(19, 39),(34, 62),(91, 156)], tf.float32) / 416
+        cfg_mod = ConfigModel()
 
-    def __init__(self, cfg, ckpt_dir):
+        for k, v in self.__dict__.items():
+            setattr(cfg_mod, k, v)
 
-        """
-        :param backbone: backbone architecture (string)
-        :param isdefault: default or calculated anchors
-        """
+        return cfg_mod
 
+def UpdateConfigYolo(cfg):               
+    
+    """
+    :param backbone: backbone architecture (string)
+    :param isdefault: default or calculated anchors
+    """
+
+    yolo = Yolo(cfg)
+
+    setattrs(cfg, ANCHORS = yolo.ANCHORS, 
+                  MASKS = yolo.MASKS, 
+                  DEFAULT_YOLO_WEIGHT_PATH = yolo.DEFAULT_YOLO_WEIGHT_PATH)          
+
+class Yolo:
+    MASKS     = [[6, 7, 8], [3, 4, 5], [0, 1, 2]]             # Sequential layers (3) are responsible for predicting masks of decreasing size 
+    
+    ANCHORS_9 = [np.array([(1, 8),(2, 8),(2, 2),(6, 26),(7, 10),(11, 16),(18, 20),(24, 44),(68, 134)], np.float32) / 416][0].tolist()
+    ANCHORS_6 = [np.array([(2, 7),(8, 13),(17, 19),(19, 39),(34, 62),(91, 156)], np.float32) / 416][0].tolist()
+
+    def __init__(self, cfg, default_ckpt_dir = "./data/weights/"):
         model = self.get_base_model(cfg.BACKBONE)
 
-        Yolo.NAME = model.NAME
+        istiny = (cfg.BACKBONE[-1] == "T") 
+        self.ANCHORS = model.ANCHORS
         
-        istiny = (Yolo.NAME[-1] == "T")        
         if not cfg.USE_DEFAULT_ANCHORS: 
-            model.ANCHORS = Yolo.ANCHORS_6 if istiny else Yolo.ANCHORS_9
+            self.ANCHORS = Yolo.ANCHORS_6 if istiny else Yolo.ANCHORS_9
 
-        model_dir = os.path.join(ckpt_dir, cfg.NAME)
-        if os.path.isdir(model_dir):
-            Yolo.CKPT = os.path.join(model_dir, "model.ckpt")
-        else:
-            Yolo.CKPT = os.path.join(ckpt_dir, "{:s}-416.ckpt".format(Yolo.NAME.lower()))
-        
-        Yolo.ANCHORS = model.ANCHORS           
-        if istiny: Yolo.MASKS = Yolo.MASKS[1:]         
-        
+        self.MASKS = Yolo.MASKS[1:] if istiny else Yolo.MASKS 
+        self.DEFAULT_YOLO_WEIGHT_PATH = os.path.join(default_ckpt_dir, "{:s}.weights".format(cfg.BACKBONE.lower()))
 
     def get_base_model(self, backbone):
 
@@ -323,38 +388,45 @@ class Yolo(object):
         :result: chosen backbone' configuration settings        
         """
 
-        if backbone == "yolov3": return Yolo.V3
-        if backbone == "yolov3t": return Yolo.V3T
-        if backbone == "yolov4": return Yolo.V4
-        if backbone == "yolov4t": return Yolo.V4T
+        if backbone == "YoloV3": return Yolo.V3
+        if backbone == "YoloV3T": return Yolo.V3T
+        if backbone == "YoloV4": return Yolo.V4
+        if backbone == "YoloV4T": return Yolo.V4T
 
     class V3:
-        NAME      = "YoloV3"
-        ANCHORS   = tf.constant([(10,13),(16,30),(33,23),(30,61),(62,45),(59,119),(116,90),(156,198),(373,326)],tf.float32) / 416 # Anchors specified relative to W = H as a proportion [0 - 1]             
+        ANCHORS   = [np.array([(10,13),(16,30),(33,23),(30,61),(62,45),(59,119),(116,90),(156,198),(373,326)], np.float32) / 416][0].tolist() # Anchors specified relative to W = H as a proportion [0 - 1]             
         STRIDES   = [8, 16, 32]
         XYSCALE   = [1.2, 1.1, 1.05]
             
     class V3T:
-        NAME      = "YoloV3T"
-        ANCHORS   = tf.constant([(10,14),(23,27),(37,58),(81,82),(135,169),(344,319)], tf.float32) / 416     
+        ANCHORS   = [np.array([(10,14),(23,27),(37,58),(81,82),(135,169),(344,319)], np.float32) / 416][0].tolist()     
         STRIDES   = [16, 32]
         XYSCALE   = [1.05, 1.05]
 
     class V4:
-        NAME      = "YoloV4"
-        ANCHORS   = tf.constant([(12,16),(19,36),(40,28),(36,75),(76,55),(72,146),(142,110),(192,243),(459,401)],tf.float32) / 608
+        ANCHORS   = [np.array([(12,16),(19,36),(40,28),(36,75),(76,55),(72,146),(142,110),(192,243),(459,401)], np.float32) / 608][0].tolist()
 
     class V4T:
-        NAME      = "YoloV4T"
-        ANCHORS   = tf.constant([(10,14),(23,27),(37,58),(81,82),(135,169),(344,319)], tf.float32) / 416
+        ANCHORS   = [np.array([(10,14),(23,27),(37,58),(81,82),(135,169),(344,319)], np.float32) / 416][0].tolist()
 
     
 def setattrs(_self, **kwargs):
     for k, v in kwargs.items():
         setattr(_self, k, v)
 
-def getattrs(_self, attrs):
-    return {k: getattr(_self, k) for k in attrs}
+class ConfigModel:
+    pass
 
-def is_attr_of_interest(_self, attr):
-    return not attr.startswith("__") and not callable(getattr(_self, attr)) and attr != 'YOLO'
+
+# Add bbox and class refinement to the head graph. 3 configurations are permitted:
+#  - "separate": separate graph computed in parallel 
+#  - "pose": incorporated into the pose's graph output layer
+#  - "none": no head level object detection refinement is performed
+# Abandoned owing to the 3D focus
+
+# use rpn roi
+# - ideas: train use rpn roi to enable pose detection based on possible inferior proposal
+#           regions at test time
+# - abandoned: train to learn features based on perfect information.   
+
+
