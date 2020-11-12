@@ -238,11 +238,11 @@ class Config(object):
     
     # Maximum number of possible detections in a single image. See MAX_GT_INSTANCES.
     
-    DETECTION_MAX_INSTANCES = 50
+    DET_MAX_GT_INSTANCES = 50
 
-    DETECTION_SCORE_THRESHOLD = 0.7
+    DET_RPN_SCORE_THRESHOLD = 0.7
 
-    DETECTION_IOU_THRESHOLD = 0.7
+    DET_RPN_IOU_THRESHOLD = 0.7
 
 
     # Number of training steps per epoch
