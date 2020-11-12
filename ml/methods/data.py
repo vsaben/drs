@@ -5,25 +5,26 @@
     - PART B: Reformat and transform targets
     - PART C: Build pipeline
     - PART D: Summary operations
+    -----------------------------------------
+    - PART E: Read in single tfrecord
 """
 
 import tensorflow as tf
+import math
 import os
 
-# TEMPORARY
+pi = tf.constant(math.pi)
 
-import sys
-sys.path += ["C:\\Users\\Vaughn\\projects\\work\\drs\\ml\\"]
-
-from methods._data_reformat import (
+from methods._data.reformat import (
     get_bb2d, 
     get_screen_center, 
     get_quart, 
     get_vehicle_classes, 
-    get_weather_classes
+    get_weather_classes, 
+    create_cam_rot
 )
 
-from methods._data_augment import horizontal_flip
+from methods._data.augment import horizontal_flip
 
 # PART A/B: Read in tfrecord and apply basic reformatting =================
 
@@ -45,12 +46,10 @@ IMAGE_FEATURE_MAP = {
     'dam': tf.io.VarLenFeature(tf.int64),
     'cls': tf.io.VarLenFeature(tf.string),
 
-    'cam_yaw': tf.io.FixedLenFeature([], tf.float32),
-    'cam_R': tf.io.FixedLenFeature([], tf.string),
+    'cam_rot': tf.io.FixedLenFeature([], tf.string),
     'cam_w': tf.io.FixedLenFeature([], tf.int64),
     'cam_h': tf.io.FixedLenFeature([], tf.int64),
-    'cam_fx': tf.io.FixedLenFeature([], tf.float32),
-    'cam_fy': tf.io.FixedLenFeature([], tf.float32),
+    'cam_vfov': tf.io.FixedLenFeature([], tf.float32),
 
     'env_time': tf.io.FixedLenFeature([], tf.string), 
     'env_wthr': tf.io.FixedLenFeature([], tf.string),
@@ -58,7 +57,37 @@ IMAGE_FEATURE_MAP = {
     'env_snow': tf.io.FixedLenFeature([], tf.int64)
     }
 
-#@tf.function
+def parse_basic_tfrecord(tfrecord, image_size):
+
+    ex = tf.io.parse_single_example(tfrecord, IMAGE_FEATURE_MAP)
+
+    x = tf.image.decode_jpeg(ex['image'], channels=3)
+    x = tf.image.resize(x, (image_size, image_size))
+    x /= 255 
+
+    camera = ExtractCamera(ex)
+   
+    return ex, x, camera
+
+def ExtractCamera(ex):
+
+    cam_rot = tf.io.decode_raw(ex['cam_rot'], tf.float64)
+    cam_rot = tf.reshape(cam_rot, (3,))
+    fy = 1/tf.tan(ex['cam_vfov']/2) 
+
+    camera = {'rot': cam_rot, 
+              'R': create_cam_rot(cam_rot), 
+              'w': ex['cam_w'], 
+              'h': ex['cam_h'], 
+              'fx': tf.cast(ex['cam_h']/ex['cam_w'], tf.float32) * fy, 
+              'fy': fy}
+
+    return camera
+
+def parse_detect_tfrecord(tfrecord, image_size):
+    ex, x, camera = parse_basic_tfrecord(tfrecord, image_size)
+    return x, camera
+   
 def parse_tfrecord(tfrecord, image_size):
     
     """Parse individual tfrecords and extract image, target, camera and environment features
@@ -69,22 +98,7 @@ def parse_tfrecord(tfrecord, image_size):
     :result: [x, cpos, features, camera, environment] 
     """
     
-    ex = tf.io.parse_single_example(tfrecord, IMAGE_FEATURE_MAP)
-
-    x = tf.image.decode_jpeg(ex['image'], channels=3)
-    x = tf.image.resize(x, (image_size, image_size))
-    x /= 255 
-
-    # Camera property dictionary
-
-    cam_R = tf.io.decode_raw(ex['cam_R'], tf.float64)
-    cam_R = tf.reshape(cam_R, (3, 3))
-    camera = {'yaw': ex['cam_yaw'], 
-              'R': cam_R, 
-              'w': ex['cam_w'], 
-              'h': ex['cam_h'],
-              'fx': ex['cam_fx'], 
-              'fy': ex['cam_fy']}
+    ex, x, camera = parse_basic_tfrecord(tfrecord, image_size)
 
     # Environment property dictionary
 
@@ -151,17 +165,8 @@ def transform_prebatch(x, cpos, features, camera, environment, cfg):
     #if N > 0:
 
     bb2d = get_bb2d(camera, cpos)
-    screen = get_screen_center(camera, cpos)
+    features = tf.transpose(features) 
         
-    dims = cpos[:, 3:6] # [dimx, dimy, dimz]
-    if cfg.USE_DIM_ANCHORS:                             
-        med_dims = cfg.YOLO.DIM_ANCHORS
-        dims -= med_dims    
-    dims = tf.transpose(dims)
-
-    quart = get_quart(cpos)
-    features = tf.transpose(features)    
-    
     input_rpn = tf.stack([
         
         # Input: RPN [4 + 1 = 5]
@@ -172,6 +177,16 @@ def transform_prebatch(x, cpos, features, camera, environment, cfg):
         bb2d[3],      # ymax                      
         features[0]], # dam
                          axis = 1)
+
+    screen = get_screen_center(camera, cpos)
+    
+    dims = cpos[:, 3:6] # [dimx, dimy, dimz]
+    if cfg.USE_DIM_ANCHOR:                             
+        med_dims = tf.constant(cfg.DIM_ANCHOR, tf.float32)
+        dims -= med_dims    
+    dims = tf.transpose(dims)
+
+    quart = get_quart(cpos)
 
     input_pose = tf.stack([
 
@@ -210,22 +225,13 @@ def transform_prebatch(x, cpos, features, camera, environment, cfg):
               'input_pose': tf.ensure_shape(padded_pose, (cfg.MAX_GT_INSTANCES, 10)), 
               'input_rpn': tf.ensure_shape(padded_rpn, (cfg.MAX_GT_INSTANCES, 5))} # seems alphabetical
     
-    outputs = {k: tf.constant(0) for k, v in cfg.LOSSES.items()}
-
+    outputs = tf.constant(0) 
+              
     return inputs, outputs
-
-#def depad_batch(arr):
-#    N = [tf.math.count_nonzero(batch[:, 0]) for batch in arr]
-#    tensors = [batch[:n, :] for batch, n in zip(arr, N)]
-#    vals = tf.concat(tensors, axis=0)
-#    lens = [tf.shape(t)[0] for t in tensors] 
-#    return tf.RaggedTensor.from_nested_row_lengths(vals, lens)
-
 
 # B/C: Further reformat, batch, augment and shuffle the data ========================================
 
-#@tf.function
-def load_ds(cfg, data_path, istrain):
+def load_ds(data_path, istrain, cfg):
 
     """Load, augment and batch training or validation data using tensorflow's dataset iterator
     
@@ -262,7 +268,7 @@ def read_and_parse(data_path, image_size, istrain = True):
     :note: interleave - where perform operations in parallel above parallel_calls 
            (possible training time improvement)
     :note: cache - none as data does not fit into memory 
-    :note:  repeat - not seem necessary given reshuffle after each iteration
+    :note: repeat - not seem necessary given reshuffle after each iteration
 
     :param data_path: folder containing training and validation tfrecord subfolders
     :param size: resized, target image size
@@ -280,11 +286,33 @@ def read_and_parse(data_path, image_size, istrain = True):
     ds = ds.map(lambda e: parse_tfrecord(e, image_size))    
     return ds
 
-"""
-data_path = "C:\\Users\\Vaughn\\projects\\work\\drs\\ml\\data\\"
-image_size = 416
-istrain = True
-"""
+# PART D: Read in a single example ================================================
+
+def load_tfrecord(regex, mode, cfg):
+
+    """Load tfrecord for detection and/or inference
+
+    :param regex: regex distinguishing tfrecord/s
+    :param mode: 'inference' (w/ annotations) OR 'detection' (w/o annotations)
+    :param cfg: model configuration settings
+
+    :result: [x, camera]      (detection)
+             [x, camera, out] (inference)
+    :result out: [bbox, score = 1, cls, center, depth, dimensions, quarternions]
+    """
+
+    with_anns = (mode in ["inference"])
+
+    ds = tf.data.Dataset.list_files(regex) 
+    nimage = tf.data.experimental.cardinality(ds).numpy()
+
+    ds = tf.data.TFRecordDataset(ds)
+
+    if not with_anns:
+        ds = ds.map(lambda e: parse_detect_tfrecord(e, cfg.IMAGE_SIZE))
+    
+    ds = ds.batch(nimage)
+    return ds
 
 
 

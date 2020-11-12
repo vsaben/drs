@@ -6,46 +6,45 @@
     - PART C: Freeze specified darknet layers
 """
 
-import datetime
 import os
+import numpy as np
+import pickle
+
+from absl import logging
 
 import tensorflow as tf
-from tensorflow.keras import Model
+import tensorflow.keras as K
 import tensorflow.keras.layers as KL 
 import tensorflow.keras.metrics as KM
-from tensorflow.keras.regularizers import l2    
+import tensorflow.keras.regularizers as KR    
+import tensorflow.keras.callbacks as KC
 
-from tensorflow.keras.callbacks import (
-    ReduceLROnPlateau, 
-    EarlyStopping, 
-    ModelCheckpoint, 
-    TensorBoard
-)
-
-from methods._models_yolo import build_yolo_graph, extract_anchors_masks
-from methods._model_head import build_drs_head
-from methods._data_targets import transform_targets, extract_roi_pd
-from methods.loss import compute_rpn_losses, compute_pose_losses
-
+from methods._model.yolo import build_yolo_graph
+from methods._model.head import RoiAlign, PoseGraph, DetectionTargetsLayer, OutLayer
+from methods._data.targets import transform_targets
+from methods._data import convert
+from methods.loss import ClsMetricLayer, RpnMetricLayer, PoseMetricLayer, CombineLossesLayer
+from methods.metrics import PlotConfusionMatrix
 
 # B: Collate model ===========================================================================
 
 class DRSYolo():
+
     """Encapsulates DRSYolo functionality"""
 
-    def __init__(self, mode, cfg):
+    def __init__(self, mode, cfg, val_ds=None):
 
         """
-        :param mode: "training" or "inference"
+        :param mode: "training", "inference" or "detection"
         :param cfg: configuration settings
         """
 
-        assert mode in ['training', 'inference']
+        assert mode in ['training', 'inference', 'detection']
         self.mode = mode
         self.cfg = cfg
-        self.model = self.build(mode=mode, cfg=cfg)
+        self.val_ds = val_ds
 
-    def build(self, mode, cfg):
+    def build_model(self):
 
         """Build DRSYolo architecture
         
@@ -56,39 +55,71 @@ class DRSYolo():
         :input_pose:      [nbatch, cfg.MAX_GT_INSTANCES, center [2] + depth [1] + dims [3] + quart [4]]       
         """
 
+        cfg = self.cfg
+
         # Inputs
 
-        input_image = KL.Input([cfg.IMAGE_SIZE, cfg.IMAGE_SIZE, cfg.CHANNELS], name='input_image')                
-        inputs = [input_image] 
+        input_image = KL.Input([cfg['IMAGE_SIZE'], cfg['IMAGE_SIZE'], cfg['CHANNELS']], name='input_image')                
 
-        if mode == 'training':     
-            input_pose = KL.Input([cfg.MAX_GT_INSTANCES, 10], name='input_pose')   
-            input_rpn = KL.Input([cfg.MAX_GT_INSTANCES, 5], name='input_rpn')                     
-            inputs += [input_pose, input_rpn]
+        if self.mode == 'training':     
+            input_pose = KL.Input([cfg['MAX_GT_INSTANCES'], 10], name='input_pose')   
+            input_rpn = KL.Input([cfg['MAX_GT_INSTANCES'], 5], name='input_rpn')                     
+            inputs = [input_image, input_pose, input_rpn]
 
             gt_boxes = KL.Lambda(lambda x: transform_targets(*x, cfg=cfg), name='gt_boxes')([input_rpn, input_pose])
-
-        # Model
+            gt_od = input_rpn
+            gt_pose = tf.concat([input_rpn, input_pose], axis = -1, name='gt_pose')  # [nbatch, cfg.MAX_GT_INSTANCES, 5 + 10]
+            
+        # RPN
         
-        rpn_fmaps, pd_boxes, nms = build_yolo_graph(input_image, cfg) 
-              
-        #if mode == "training" and not cfg.USE_RPN_ROI: 
-        #rpn_rois = input_all_pad[:, :, 0:4]
+        rpn_fmaps, pd_boxes, nms = build_yolo_graph(input_image, cfg)    
+        rpn_roi = nms[0]
 
-        roi = input_rpn[..., :4]                                         # [nbatch, cfg.MAX_GT_INSTANCES, (x1, y1, x2, y2)]
-        pd_pose = build_drs_head(roi, rpn_fmaps, cfg)                           # [nbatch, cfg.MAX_GT_INSTANCES, 1, 10]
-        gt_pose = input_pose                                            # [nbatch, cfg.MAX_GT_INSTANCES, 10]
- 
-        # Losses
+        if self.mode == "training":
+
+        #    if cfg.USE_RPN_ROI:            
+        #        gt_pose, gt_od = DetectionTargetsLayer(cfg, name = 'extract_pose_od')([rpn_roi, gt_boxes])
+        #    else:
+            
+            rpn_roi = gt_od[..., :4]                     # [nbatch, cfg.MAX_GT_INSTANCES, (x1, y1, x2, y2)] 
+
+        roi_align = RoiAlign(cfg, name='roi_align')([rpn_roi, rpn_fmaps])         
         
-        rpn_loss = RpnMetricLayer(cfg, name='rpn_loss')([pd_boxes, gt_boxes])
-        pose_loss = PoseMetricLayer(cfg, name='pose_loss')([pd_pose, gt_pose])
+        # HEAD
 
-        outputs = [rpn_loss, pose_loss] 
+        pd_pose = PoseGraph(cfg, name='pose_graph')([roi_align])        # [nbatch, cfg.MAX_GT_INSTANCES, 10] 
+                      
+        if self.mode == 'detection': 
+            outs = OutLayer(name='out')([nms, pd_pose])
+            return K.Model(input_image, outs, name='drs_yolo')
+        
+        # METRICS
 
-        return Model(inputs, outputs, name='drs_yolo')
+        cls_metric = ClsMetricLayer(cfg, name='cm_metric')([pd_boxes, gt_boxes])
 
-    def load_weights(self):
+        # LOSSES
+
+        # note: only training mode left
+        # note: ensure model json serialisable: pruning, quantisation
+
+        rpn_loss = RpnMetricLayer(cfg, name='rpn_loss')([pd_boxes, gt_boxes])        
+        pose_loss = PoseMetricLayer(cfg, name='pose_loss')([pd_pose, gt_pose]) 
+
+        loss = CombineLossesLayer(cfg, name='loss')([rpn_loss, pose_loss, cls_metric])
+  
+        return K.Model(inputs, loss, name='drs_yolo') 
+
+    def build(self, transfer=False):
+        self.model = self.build_model()
+        self.compile()
+
+        if self.mode == 'training' and not transfer:
+            self.freeze_darknet_layers()
+                    
+        self.load_weights(optimiser=not transfer)
+        
+
+    def load_weights(self, optimiser=True):
 
         """Load saved model weights OR intialise default yolo backend 
         :note: weight transfer assumed better than weight initialisation strategies.
@@ -101,13 +132,55 @@ class DRSYolo():
         :result: model weights initialised
         """
 
-        weight_path = self.cfg.YOLO.CKPT
+        ckpt_dir = os.path.join(self.cfg['MODEL_DIR'], "checkpoints")
+        weight_path = os.path.join(ckpt_dir, "weights")
 
-        file_name = os.path.basename(os.path.normpath(weight_path))
-        by_name = (file_name == "model.ckpt")
-        self.model.load_weights(weight_path, by_name = by_name)
+        if self.mode == "training":
+            if os.path.isdir(ckpt_dir):
+                if optimiser:
+                    optim_path = os.path.join(ckpt_dir, "optimiser.pkl") 
+                    if os.path.isfile(optim_path):                  # important: set model weights after optimizer (otherwise reset)
+                        with open(optim_path, 'rb') as f:
+                            weights = pickle.load(f)
+                
+                        opt = tf.keras.optimizers.get('Adam') 
+                        opt.set_weights(weights)
+                        logging.info('optimiser weights loaded')    
+
+                self.model.load_weights(weight_path, by_name=False) # by_name=False --> loading from tensorflow format topology            
+                logging.info('model weights loaded: {:s}'.format(self.mode))            
+            else:
+                convert.load_raw_weights(self)
+                logging.info('pretrained weights loaded: {:s}'.format(self.mode))
+        else:
+            train = DRSYolo("training", self.cfg)
+            train.build(transfer=True)
+            train.model.load_weights(weight_path, by_name=False)
+
+            weighted_names = [submod.name for submod in train.model.layers if 
+                              len(submod.get_weights()) > 0]
+
+            for name in weighted_names:
+                weights = train.model.get_layer(name).get_weights()            
+                self.model.get_layer(name).set_weights(weights)
+
+            logging.info('model weights loaded: {:s}'.format(self.mode))       
+
+    @staticmethod
+    def restore(cfg, val_ds):
         
-    
+        """Restores DRSYolo class during training
+
+        :note: tensorflow bug in full model restore
+               AttributeError: '_UserObject' object has no attribute 'summary'
+               load model and optimiser weights (in the interim)
+        """
+
+        full_model_dir = os.path.join(cfg['MODEL_DIR'], 'model')
+        cls = DRSYolo("training", cfg, val_ds)
+        #cls.model = K.models.load(full_model_dir)
+        return cls
+
     def freeze_darknet_layers(self, isper = True):
 
         """Unfreeze darknet conv2d, batch-norm pairs assorted from back to front
@@ -121,7 +194,7 @@ class DRSYolo():
                  number of layers unfrozen
         """
 
-        no_unfreeze = self.cfg.PER_DARKNET_UNFROZEN
+        no_unfreeze = self.cfg['PER_DARKNET_UNFROZEN']
         darknet = self.model.get_layer('yolo').get_layer('darknet')
     
         # Freeze darknet
@@ -154,55 +227,26 @@ class DRSYolo():
         """
 
         cfg = self.cfg
-        optimizer = tf.keras.optimizers.Adam(lr=cfg.LR_INIT)
+        optimizer = K.optimizers.Adam(learning_rate=cfg['LR_INIT'])
 
-        # Add: Losses
-
-        #self.model._losses = []             ADJUST
-        #self.model._per_input_losses = {}
-   
-        for loss_name, loss_weight in cfg.LOSSES.items():
-            layer = self.model.get_layer(loss_name)
-            #if (layer.output in model.losses): 
-            #    continue
-            loss = tf.reduce_mean(layer.output, keepdims=True) * loss_weight 
-            self.model.add_loss(loss) 
-
-        # Add: L2 Regularisation
+        # Add: Regularisation loss [L2]
         # note: skip gamma and beta weights of batch normalization layers.
         # ADJUST: division by size
 
-        reg_losses = [l2(cfg.WEIGHT_DECAY)(w) / tf.cast(tf.size(w), tf.float32)
+        reg_losses = [KR.l2(cfg['WEIGHT_DECAY'])(w) / tf.cast(tf.size(w), tf.float32)
                         for w in self.model.trainable_weights
                         if 'gamma' not in w.name and 'beta' not in w.name]
         
-        tot_reg_losses = tf.add_n(reg_losses)
+        tot_reg_losses = tf.add_n(reg_losses, 'reg_losses')
         self.model.add_loss(lambda: tot_reg_losses)
-        # self.model.add_metric(tot_reg_losses, aggregation='mean', name='reg_loss')
 
-        self.model.compile(optimizer=optimizer, 
+        self.model.compile(optimizer=optimizer,
                            loss=[None]*len(self.model.outputs))
-                      
-        # Add: Metrics
-
-        # > RPN (ADJUST: Convert function for rpn/head)
-
-        #for subloss_name in {**cfg.RPN_TYPE_LOSSES}: # ,**cfg.METRICS, , subloss_weight .items()
-            #if (loss_name in model.metrics_names) or (loss_weight == 0):
-            #    continue
-        #    layer = self.model.get_layer(subloss_name) 
-        #    subloss = tf.reduce_mean(layer.output, keepdims=True)
-        #    print(subloss, layer.output) # ADJUST
-        #    self.model.add_metric(KM.Mean()(subloss), name=subloss_name) 
-
-        #   for metric_name in metric_names:
-        #        layer = model.get_layer(metric_name)             
-        #               # reduced_sum >>> reduced_mean [ADJUST]
-        #        
+                           
 
         # Disable: Training of batch normalisation layers
 
-        if not cfg.TRAIN_BN:
+        if not cfg['TRAIN_BN']:
             yolo_model = self.model.get_layer('yolo')
             bn_layers = [l for l in self.model.layers if ('batch_normalization' in l.name)]
             for bn_layer in bn_layers:
@@ -210,140 +254,258 @@ class DRSYolo():
 
 
     def get_callbacks(self):        
-        cfg = self.cfg
-
-        time = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")    
-        log_dir = os.path.join("logs", cfg.NAME, time)            
-        ckpt_dir = os.path.join("checkpoints", cfg.NAME)    
+        
+        train_dir = os.path.join(self.cfg['LOG_DIR'], 'cm_train')
+        train_fwriter = tf.summary.create_file_writer(train_dir)
+        
+        val_dir = os.path.join(self.cfg['LOG_DIR'], 'cm_validation')
+        val_fwriter = tf.summary.create_file_writer(val_dir)
+        
+        ckpt_dir = os.path.join(self.cfg['MODEL_DIR'], "checkpoints")    
    
         callbacks = [
-                ReduceLROnPlateau(verbose=1, min_lr = cfg.LR_END),
-                EarlyStopping(patience=3, verbose=1),            
-                TensorBoard(log_dir=log_dir, 
-                            histogram_freq=1, 
-                            write_images=True), 
-                ModelCheckpoint(ckpt_dir + '{epoch}.ckpt', 
-                                verbose=1, 
-                                save_best_only=True,
-                                save_weights_only=True, 
-                                save_freq = 'epoch')]
-
+                KC.ReduceLROnPlateau(patience=10, verbose=2, min_lr = self.cfg['LR_END']),
+                KC.EarlyStopping(patience=10, verbose=2),            
+                KC.TensorBoard(log_dir=self.cfg['LOG_DIR'], 
+                               histogram_freq=5, 
+                               write_images=True,
+                               write_graph=True, 
+                               update_freq='epoch'), 
+                ModelRestartCheckpoint(ckpt_dir, self.cfg['BEST_VAL_LOSS']), 
+                EpochCM(train_fwriter, 
+                        val_fwriter, 
+                        self.cfg['TOTAL_EPOCHS'], 
+                        len(self.cfg['MASKS']))]
         return callbacks
 
     def summary(self):
         self.model.summary()
 
     def fit(self, train_ds, val_ds):
-        cfg = self.cfg
-        self.model.fit(train_ds, 
-                       epochs=cfg.EPOCHS,
-                       #callbacks=self.get_callbacks(),
-                       validation_data=val_ds, 
-                       verbose=2) 
 
-class RpnMetricLayer(KL.Layer):   
-    
-    def __init__(self, cfg, name=None):
-        super(RpnMetricLayer, self).__init__(name=name)
-        self.cfg = cfg
+        initial_epoch = self.cfg['TOTAL_EPOCHS']
+        epochs = self.cfg['TOTAL_EPOCHS'] + self.cfg['EPOCHS']
 
-    def call(self, inputs):
-        """ Log all computed rpn losses as metrics, at all levels of abstraction incl.
-        type, level and type-level.
-        
-        :note: 'aggregation' = how to aggregate the per-batch values over each epoch
-        
-        :return: batch rpn loss
+        history = self.model.fit(train_ds, 
+                                initial_epoch=initial_epoch, 
+                                epochs=epochs,
+                                callbacks=self.get_callbacks(),
+                                validation_data=val_ds, 
+                                verbose=2)
+        return history
+
+    def save(self, full=False, schematic=False):
+
+        """Saves full model and optimiser weights (workaround)
+
+        :note: optimiser weights saved separately | tensorflow
+               error in model restore (revert when error resolved)
         """
-        
-        pd_boxes, gt_boxes = inputs
-        all_rpn_losses = KL.Lambda(lambda x: compute_rpn_losses(*x, cfg=self.cfg))([pd_boxes, gt_boxes])
 
-        anchors, masks = extract_anchors_masks(self.cfg.YOLO)
-        nlevels = len(masks)
+        # Full model
 
-        # Type [t]
+        if full:
+            full_model_dir = os.path.join(self.cfg['MODEL_DIR'], 'model')        
+            self.model.save(full_model_dir) 
+            logging.info('model saved to {:s}'.format(full_model_dir))
 
-        lweights = tf.constant(list(self.cfg.RPN_LVL_LOSSES.values())[:nlevels])
-        all_tloss = tf.transpose(all_rpn_losses, [0, 2, 1])             # [nbatch, nlosses, nlevels]        
-        weighted_tloss = all_tloss * lweights                           # [nbatch, nlosses, nlevels]        
-        sum_tloss = tf.reduce_sum(weighted_tloss, axis = 2)             # [nbatch, nlosses]        
-        mean_tloss = tf.reduce_mean(sum_tloss, axis = 0)                # [nlosses]
-        
-        tnames = list(self.cfg.RPN_TYPE_LOSSES.keys())
-        ntypes = len(tnames)
-        for i in range(ntypes):
-            self.add_metric(mean_tloss[i], name=tnames[i], aggregation="mean") 
-        
-        # Level [l]
+        # Optimiser
 
-        tweights = tf.constant(list(self.cfg.RPN_TYPE_LOSSES.values()))
-        weighted_lloss = all_rpn_losses * tweights                     # [nbatch, nlevels, nlosses]
-        sum_lloss = tf.reduce_sum(weighted_lloss, axis = 2)            # [nbatch, nlevels]
-        mean_lloss = tf.reduce_mean(sum_lloss, axis = 0)               # [nlevels]
+        optim_path = os.path.join(self.cfg['MODEL_DIR'], 'checkpoints', 'optimiser.pkl')        
+        weights = tf.keras.optimizers.get('Adam').get_weights()
 
-        lnames = list(self.cfg.RPN_LVL_LOSSES.keys())[:nlevels]
-        for i in range(nlevels):
-            self.add_metric(mean_lloss[i], name=lnames[i], aggregation="mean") 
+        with open(optim_path, 'wb') as f:
+            pickle.dump(weights, f)
 
-        # Type-Level
+        logging.info('optimiser weights saved to {:s}'.format(optim_path))
 
-        for lvl in range(nlevels):
-            for typ in range(ntypes): 
-                mean_tlloss = tf.reduce_mean(all_rpn_losses[:, lvl, typ])                
-                lname = extract_subloss_shortname(lnames[lvl])
-                tname = extract_subloss_shortname(tnames[typ])                
-                tlname = 'rpn_{:s}_{:s}_loss'.format(lname, tname) 
-                self.add_metric(mean_tlloss, name=tlname, aggregation="mean")
+        if schematic:
 
-        # Final
-                
-        rpn_loss = tf.reduce_sum(mean_tloss * tweights, name='rpn_loss')
-        return rpn_loss
+            """Plots model schematic to file"""
 
-def extract_subloss_shortname(name):
+            plot_path = os.path.join(self.cfg['MODEL_DIR'], "model_schematic.png")
 
-    _1 = name.find('_') + 1
-    _2 = name.rfind('_')
+            self.model._layers = [layer for layer in self.model._layers if isinstance(layer, KL.Layer)]
+            tf.keras.utils.plot_model(self.model, 
+                                      to_file=plot_path, 
+                                      show_layer_names=False, 
+                                      expand_nested=True)
+            
+            logging.info("model schematic saved to {:s}".format(plot_path))       
 
-    return name[_1:_2]
+    def predict(self, x):
+        return self.model(x, training=False)
 
-class PoseMetricLayer(KL.Layer):
+class ModelRestartCheckpoint(KC.Callback):    
     
-    def __init__(self, cfg, name=None):
-        super(PoseMetricLayer, self).__init__(name=name)
-        self.cfg = cfg
+    """Saves model weights of the best model, as defined by that that 
+    yields the smallest 'val_loss' measure. Weights are saved to the
+    checkpoint directory. The initial 'val_loss' is set to the 
+    previously trained model's best 'val_loss'.
+    """
 
-    def call(self, inputs):
-        """Log all computed pose losses as metrics including 
-        bbox (optional), class (optional), center, depth, dimension and rotation
+    def __init__(self, ckpt_dir, initial_val_loss):
+        super(ModelRestartCheckpoint, self).__init__()
+        self.ckpt_dir = os.path.join(ckpt_dir, 'weights')
+        self.initial_val_loss = initial_val_loss 
+    
+    def on_train_begin(self, logs=None):
+        self.best = self.initial_val_loss
+
+    def on_epoch_end(self, epoch, logs=None):
+        current = logs.get("val_loss")
+        if np.less(current, self.best):
+            logging.info('val loss improved from {:.0f} to {:.0f}. weights saved to {:s}'
+                            .format(self.best, current, self.ckpt_dir))
+            self.best = current
+            self.model.save_weights(self.ckpt_dir)
+        else:
+            logging.info('val loss did not improve.')
+            
+class EpochCM(KC.Callback):
+
+    """Posts confusion matrix metrics (at each prediction-levels and overall)
+    to the tensorboard. Confusion values are calculated over an entire epoch. This 
+    avoids issues arising from undefined operations in tensorflow's batch-level metric
+    'update_state' and mean aggregation. These issues are especially pertinent 
+    where there are no damaged instances (recall error), or damaged predictions in  
+    a batch (precision error). 
+                     
+        confusion:
         
-        :param pd_head:
-        :param gt_head:
+                 true | 0   1  
+            --------------------
+            pred    0 | TN  FN
+                    1 | FP  TP
 
-        """
-        pd_pose, gt_pose = inputs
-        all_pose_losses = KL.Lambda(lambda x: compute_pose_losses(*x, cfg=self.cfg))([pd_pose, gt_pose]) # [nbatch, nlosses]
+        metrics:
+        
+            accuracy = (TN + TP) / (TN + FN + FP + TP)      
+            precision = TP / (FP + TP)
+            negative prediction value (npv) = TN / (FN + TN)
+            recall = TP / (FN + TP)
+            specificity = TN / (TN + FP)
+            f1 = 2 * (precision * recall) / (precision + recall)
 
-        pose_dict = self.cfg.POSE_SUBLOSSES
-        nlosses = len(pose_dict)
-        pnames = list(pose_dict.keys())
-        pweights = list(pose_dict.values())
+        undefined metrics: (in a batch) 
+                                 acc pre npv rec spe f1
+           IF only predict N          X               X   (FP = TP = 0)
+           IF only predict P              X               (FN = TN = 0)
+           IF only true N                     X       X   (FN = TP = 0)
+           IF only true P                         X       (TN = FP = 0)
 
-        # Sublosses
+           calculations across an epoch ensure a sufficient distribution of 
+           damaged and undamaged detections for calculation of confusion matrix metrics
 
-        for i in range(nlosses):
-            self.add_metric(all_pose_losses[i], name=pnames[i], aggregation='mean')
+    """
 
-        # Final
+    CM_LOGS = ['tn', 'fn', 'fp', 'tp']
 
-        pose_loss = tf.reduce_sum(all_pose_losses * pweights, name='pose_loss')
-        return pose_loss
+    def __init__(self, train_writer, val_writer, total_epochs, nlevels):
+        super(EpochCM, self).__init__()
+        self.train_writer = train_writer
+        self.val_writer = val_writer
+        self.total_epochs = total_epochs
+        self.nlevels = nlevels
 
-#def depad(tensor):
-#    ragged = tf.RaggedTensor.from_tensor(tensor, padding=0, ragged_rank = 2)
-#    nested_row_lengths = ragged.nested_row_lengths()
-#    ix = tf.squeeze(tf.where(tf.not_equal(row_lengths, 0)))
-#    return tf.gather(ragged, ix)    
-#    #return tensor.to_tensor()
+    # Initialise confusion matrix at epoch start
 
+    def set_quant_attrs(self, isval = False):
+
+        for quant in self.CM_LOGS: 
+            if isval: 
+                quant = "val_" + quant 
+            setattr(self, quant, 0)
+            for lvl in range(self.nlevels):
+                name = quant + "_{:d}".format(lvl)
+                setattr(self, name, 0)
+
+    def on_epoch_begin(self, epoch, logs=None):        
+        self.set_quant_attrs(False)
+        
+    def on_test_begin(self, logs=None):
+        self.set_quant_attrs(True)
+       
+    # Update confusion matrix at batch end
+
+    def update_quant_attr(self, logs, quant, isval=False, lvl=None):
+      
+        if lvl is not None: 
+            quant += "_{:d}".format(lvl)            
+
+        prop = "val_" + quant if isval else quant 
+  
+        current = getattr(self, prop)
+        add = logs[quant]
+        setattr(self, prop, current + add)
+
+    def update_quant_attrs(self, logs, isval=False):
+
+        for quant in self.CM_LOGS:            
+            self.update_quant_attr(logs, quant, isval)
+            for lvl in range(self.nlevels):
+                self.update_quant_attr(logs, quant, isval, lvl)
+
+    def on_train_batch_end(self, batch, logs=None):
+        self.update_quant_attrs(logs, isval=False)
+
+    def on_test_batch_end(self, batch, logs=None):
+        self.update_quant_attrs(logs, isval=True)
+    
+    # Compute epoch confusion matrix metrics
+
+    def process_attrs(self, writer, isval, lvl=None):
+
+        prefix = "val_" if isval else ""
+        suffix = "_{:d}".format(lvl) if lvl is not None else ""
+
+        tn, fn, fp, tp = [getattr(self, prefix + quant + suffix) for quant in self.CM_LOGS]
+        eps = 0.0000001
+
+        acc = (tp + tn) / (tn + fn + fp + tp + eps) 
+        pre = tp / (fp + tp + eps)
+        npv = tn / (fn + tn + eps)
+        rec = tp / (fn + tp + eps)
+        spe = tn / (tn + fp + eps)
+        f1 = 2 * (pre * rec) / (pre + rec + eps)
+
+        cls_suffix = "  " if suffix == "" else suffix 
+        cls_base = "{:s} cls".format("V" if isval else "T")
+
+        print("{:s}   acc: {:.2f} | pre: {:.2f} | npv: {:.2f} | rec: {:.2f} | spe: {:.2f} | f1: {:.2f}"
+              .format(cls_base + cls_suffix, acc, pre, npv, rec, spe, f1))
+
+        with writer.as_default():
+            tf.summary.scalar('cls_accuracy' + suffix, acc, step=self.total_epochs)
+            tf.summary.scalar('cls_precision' + suffix, pre, step=self.total_epochs)
+            tf.summary.scalar('cls_npv' + suffix, npv, step=self.total_epochs)
+            tf.summary.scalar('cls_recall' + suffix, rec, step=self.total_epochs)
+            tf.summary.scalar('cls_specificity' + suffix, spe, step=self.total_epochs)
+            tf.summary.scalar('cls_f1' + suffix, f1, step=self.total_epochs)
+
+        confusion = np.array([[tn, fn], 
+                              [fp, tp]])
+
+        PlotConfusionMatrix(writer, confusion, self.total_epochs, lvl)
+
+    def on_epoch_end(self, epoch, logs=None):
+
+        levels = [None] + list(range(self.nlevels))
+
+        for isval in [False, True]:
+            
+            writer = self.train_writer if not isval else self.val_writer
+
+            for lvl in levels:
+                self.process_attrs(writer, isval, lvl)
+
+        self.total_epochs += 1
+            
+    
+    
+
+   
+                        
+
+
+  
