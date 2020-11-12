@@ -25,8 +25,8 @@ for physical_device in physical_devices:
     tf.config.experimental.set_memory_growth(physical_device, True)
 
 from methods.data import load_tfrecord
-from methods.collect import collect_dets
-from methods.visualise import visualise_dets
+from methods.collect import collect_detections
+from methods.visualise import visualise_detections
 from methods.model import DRSYolo
 from config import Config
 
@@ -98,7 +98,7 @@ def main(_argv):
                                 
     # PART D: Draw annotations =========================
 
-        ann_img = visualise_dets(dets)
+        ann_img = visualise_detections(dets)
     
         if FLAGS.save:
 
