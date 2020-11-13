@@ -1,23 +1,21 @@
-# Description: Visualise target
-# -----------------------------------------------
-#  1: 2D BB
-#  2: 3D BB (w/ corner labels)
-#  3: Features: 
-#         > Truncation
-#         > Occlusion
-#         > Damage status
-#         > Vehicle class 
-# -----------------------------------------------
+"""
+    Description: Superimpose and/or save image annotations
 
-import matplotlib.pyplot as plt
+    Options: (or combinations thereof)
+        
+        1. 3D bbox
+        2. 2D bbox
+        3. Features
+"""
+
 import cv2
 import numpy as np
 import random
 
-import sys
-sys.path += ["C:/Users/Vaughn/projects/work/drs/annotations"]
-
-def ShowBB(basepath, col_img, control, environment, targets, setting, display_features = True, save_image = False):
+def draw_annotations(basepath, col_img, control, environment, targets, camera, 
+                     setting=2, 
+                     display_features = True, 
+                     save_image = False):
  
     _2d = 1
     _3d = 2
@@ -27,23 +25,25 @@ def ShowBB(basepath, col_img, control, environment, targets, setting, display_fe
 
     isday = control["assess_factors"]["timeofday"] == 'd'
     col_day = (0, 0, 0) if isday else (255, 255, 255)
-    col_arr = show_control(col_arr, control, environment, targets, col_day)
+    col_arr = show_control(col_arr, control, environment, targets, camera, col_day)
     
     for i, target in enumerate(targets):
 
-        col_dam = (0, 0, 255) if target.damage else (0, 0, 0)                       # Damage: red [damage], black [undamaged]
+        col_dam = (0, 0, 255) if target.damage else (0, 0, 0)                           # Damage: red [damage], black [undamaged]
         
         col_arr = showp(col_arr, target.sW)                                             # ADD: Center
         if not setting == _3d: col_arr = show2d(col_arr, target.bbox2d, col_dam)        # ADD: 2D BB
         if not setting == _2d: col_arr = show3d(col_arr, target.bbox3d, col_dam)        # ADD: 3D BB
-        if display_features: col_arr = show_features(col_arr, target, i + 1, col_day)   # ADD: Features
-         
-    if save_image:
+        if display_features: col_arr = show_features(col_arr, target, i, col_day)       # ADD: Features
+    
+    if save_image:        
         ann_path = basepath + "_annotated.jpeg"
         cv2.imwrite(ann_path, col_arr)
+        print(ann_path)
 
-    cv2.imshow('image', col_arr)
-    cv2.waitKey(0)
+    else:
+        cv2.imshow('detect', col_arr)
+        cv2.waitKey(0)    
 
 def showp(col_arr, p):
     return cv2.circle(col_arr, tuple(p), 2, (255, 255, 255), -1)
@@ -94,13 +94,13 @@ def show_features(col_arr, target, i, col_day):
 
     # Features
 
-    text = '{:s} | {} | {:.2f} | {:.2f} | {:.2f} | {:.2f} | {:.2f}'.format(cnr_key.capitalize(), 
-                                                                           target.truncation, 
+    rotx, roty, rotz = np.degrees(target.rot).astype(int)
+    text = '{:s} | Occ: {:.2f} | Rot: <{:d},{:d},{:d}> | Pix: {:d}'.format(cnr_key.capitalize(), 
                                                                            target.occluded,                                                         
-                                                                           np.degrees(target.rot[0]),
-                                                                           np.degrees(target.rot[1]),
-                                                                           np.degrees(target.rot[2]),
-                                                                           target.pixelarea / 1000)
+                                                                           rotx,
+                                                                           roty,
+                                                                           rotz,
+                                                                           target.pixelarea)
 
     col_arr = cv2.putText(col_arr, text, cnr_val, 
                           fontFace=cv2.FONT_HERSHEY_COMPLEX_SMALL, 
@@ -115,16 +115,15 @@ def show_features(col_arr, target, i, col_day):
                           thickness=1)
     return col_arr
 
-def show_control(col_arr, control, environment, targets, col_day):
+def show_control(col_arr, control, environment, targets, camera, col_day):
 
     nvehicles = len(targets)
     ndamaged = len([target for target in targets if target.damage])
 
-    ctrl_text = "Control: {} | {} [{}] | {}".format(control["ids"]["test"], 
-                                                    nvehicles, 
-                                                    ndamaged, 
-                                                    control["assess_factors"]["altitude"])
-
+    ctrl_text = "Control: ID {} | Vehicles [Damaged] {} [{}]".format(control["ids"]["test"], 
+                                                                     nvehicles, 
+                                                                     ndamaged) 
+                                                    
     col_arr = cv2.putText(col_arr, ctrl_text, (1, 20), 
                           fontFace=cv2.FONT_HERSHEY_COMPLEX_SMALL, 
                           fontScale=0.5, 
@@ -142,13 +141,17 @@ def show_control(col_arr, control, environment, targets, col_day):
                           color=col_day, 
                           thickness=1)
 
+    cam_rotx, cam_roty, cam_rotz = np.round(np.degrees(camera.rot)).astype(int)
+    cam_text = "Camera: Altitude {:s} | Pitch {:d}".format(control["assess_factors"]["altitude"], 
+                                                           cam_rotx) 
+
+    col_arr = cv2.putText(col_arr, cam_text, (1, 60), 
+                          fontFace=cv2.FONT_HERSHEY_COMPLEX_SMALL, 
+                          fontScale=0.5, 
+                          color=col_day, 
+                          thickness=1)
+
     return col_arr
-
-
-def ShowImg(col_img):
-    plt.imshow(col_img)
-    plt.show()
-
 
 
     

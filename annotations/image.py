@@ -1,38 +1,55 @@
-# Description: Image Control
-# Function:    
-#    A. Read in image and annotation files
-#    B. Fomulate camera properties
-#    C. Extract target instances
-#    D. Visualise target instances
-#    E. Create annotation file
+"""
+    Description: Prepare and visualise image annotations
+    Function:    
+    - PART A: Read in image and annotation files
+    - PART B: Extract camera and environment properties; target instances
+    - PART C: Visualise target instances and create annotation files
+"""
 
-PKG_DIR = "C:\\Users\\Vaughn\\projects\\work\\drs\\annotations"
+from data import read_data
+from utils import Camera
+from target import generate_targets
+from visualise import draw_annotations
+from annotations import write_txt, write_tfrecord
 
-import sys
-sys.path += [PKG_DIR]
+def annotate(basepath, save_image = False, save_tfrecord = False, save_txt = False):
 
-from data import read_data, Camera
-from target import GenerateTargets
-from visualise import ShowBB
-from annotations import write_tfrecord
+    """Prepare, visualise and save annotations
 
-def Annotate(basepath, save_image = False, save_tfrecord = False):
+    :param basepath: file path substring common to all simulation components (eg. "*\015816W00RD")
+    :option save_image: save annotated image
+    :option save_tfrecord: save tfrecord
+    :option save_txt: save txt
 
-    data, col_img, col_bytes, ste_arr = read_data(basepath)      # A: Read in image and annotation files
-    camera = Camera(data["camerast"])                            # B: Formulate camera properties
-    targets = GenerateTargets(camera, data["targetst"], ste_arr) # C: Extract target instances
+    :result: visualised, saved '*._annotated.jpeg', '.txt' and/or '.tfrecord' files 
+    """
+
+    # PART A: Read in image and annotation files =================================================
+
+    isvalid, data, control, col_img, col_bytes, ste_arr = read_data(basepath)      
+    if not isvalid: 
+        print('invalid instance: ', basepath)
+        return
+
+    # PART B: Extract camera and environment properties; target instances
+
+    camera = Camera(data["camerast"])                            
+    targets = generate_targets(camera, data["targetst"], ste_arr) 
+    environment = data["environmentst"]
+
+    # PART C: Visualise target instances and create annotation files =============================
+     
+    draw_annotations(basepath, 
+                     col_img, 
+                     control, 
+                     environment, 
+                     targets,
+                     camera, 
+                     setting=2, 
+                     save_image = save_image)
     
-    # D: Visualise target instances
-
-    if len(targets) > 0:
-        control = data["controlst"]
-        environment = data["environmentst"]
-    
-        ShowBB(basepath, col_img, control, environment, targets, setting=2, save_image = save_image)
-    
-    if save_tfrecord:                                            # E: Write annotations to tfrecord           
-        write_tfrecord(basepath, col_bytes, camera, targets) 
-
+    if save_tfrecord: write_tfrecord(basepath, col_bytes, environment, camera, targets) 
+    if save_txt: write_txt(basepath, control, environment, camera, targets)
 
 
 
