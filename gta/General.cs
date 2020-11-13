@@ -68,6 +68,8 @@ namespace DRS
         // Function: Collect 3D bbox co-ordinates
         // Notation: (f)ront/(b)ack, (t)op/(b)ottom, (r)ight/(l)eft  
 
+        cnt,
+
         ftl,
         ftr,        
         fbl,

@@ -22,8 +22,9 @@ namespace DRS
 
         public static void SelectTarget(RunControl runcontrol, TestControl testcontrol)
         {            
-            testcontrol.target_vehicle = VehicleSelection.Random(runcontrol, testcontrol);                            // [a] Choose target car            
-            Game.Player.Character.SetIntoVehicle(testcontrol.target_vehicle, VehicleSeat.Driver); Script.Wait(1000);  // [b] Position player into vehicle
+            testcontrol.target_vehicle = VehicleSelection.Random(runcontrol, testcontrol);                      // [a] Choose target car            
+            Game.Player.Character.SetIntoVehicle(testcontrol.target_vehicle, VehicleSeat.Driver);               // [c] Position player into vehicle
+            Script.Wait(1000);
         }
 
         public static Dictionary<string, float> COLLISION_PARAMS = new Dictionary<string, float>()

@@ -8,7 +8,7 @@ namespace DRS
 {
     public static class Annotations
     {
-        public static Dictionary<BB3D, List<int>> GetBB3D(Entity entity)
+        public static Dictionary<BB3D, Tuple<List<float>, List<int>>> GetBB3D(Entity entity)
         {
             // Function - Output: Get entity 3D BB in screen co-ordinates
 
@@ -21,6 +21,8 @@ namespace DRS
 
             Dictionary<BB3D, Vector3> bbox3D_offset = new Dictionary<BB3D, Vector3>()
             {
+                {BB3D.cnt, new Vector3(0f, 0f, 0f) },
+
                 {BB3D.ftl, gmin[0] * r + gmax[1] * f + gmax[2] * u },
                 {BB3D.ftr, gmax[0] * r + gmax[1] * f + gmax[2] * u },
                 {BB3D.fbl, gmin[0] * r + gmax[1] * f + gmin[2] * u },
@@ -32,11 +34,12 @@ namespace DRS
                 {BB3D.bbr, gmax[0] * r + gmin[1] * f + gmin[2] * u }
             };
 
-            Dictionary<BB3D, List<int>> bbox = new Dictionary<BB3D, List<int>>();
+            Dictionary<BB3D, Tuple<List<float>, List<int>>> bbox = new Dictionary<BB3D, Tuple<List<float>, List<int>>>();
 
             foreach (BB3D key in Enum.GetValues(typeof(BB3D)))
             {
-                bbox.Add(key, new List<int>((pos + bbox3D_offset[key]).WorldToScreen()));
+                Vector3 pos_w_offset = pos + bbox3D_offset[key];
+                bbox.Add(key, new Tuple<List<float>, List<int>>(pos_w_offset.VecToList(), pos_w_offset.WorldToScreen()));
             }
 
             return bbox;

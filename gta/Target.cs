@@ -19,7 +19,7 @@ namespace DRS
         public Dictionary<string, List<float>> position;  // Position and orientation: "location" (world coord), "bbox_min", "bbox_max" (model coord)
                                                           //                           "rotation (euler)", "fwd_vec", "right_vec", "up_vec" 
 
-        public Dictionary<BB3D, List<int>> bbox;                          // 8-corner (screen coord)
+        public Dictionary<BB3D, Tuple<List<float>, List<int>>> bbox;      // 8-corner + center (3D world and screen coord)
         public Dictionary<string, Tuple<List<float>, List<int>>> bones;   // Vehicle bone (3D world and screen coord)
 
         public Damage damage;                             // Damage subclass if damaged otherwise null

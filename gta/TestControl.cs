@@ -26,6 +26,7 @@ namespace DRS
 
         /// B: Entities
 
+        public List<Entity> frozen_entities; 
         public EntitiesInLOS entities_wide;                                  // Entities: Vehicles, damaged, peds [wide frame]
 
         /// C: Collision
@@ -138,12 +139,12 @@ namespace DRS
         {
             VehiclesInLOS(runcontrol);
             TargetsDamagedInLOS();
-            PedsInLOS();     
+            PedsInLOS(runcontrol);     
         }
 
         public void VehiclesInLOS(RunControl runcontrol)
         {
-            vehicles = World.GetNearbyVehicles(runcontrol.camera.Position, 10000f).Where<Vehicle>(x => IsInLOS(x)).ToList();
+            vehicles = World.GetNearbyVehicles(runcontrol.camera.Position, 300f).Where(x => IsInLOS(x)).ToList();
         }
 
         public void TargetsDamagedInLOS()
@@ -171,10 +172,10 @@ namespace DRS
                 targets.Add(target);
             }             
         }
-        public void PedsInLOS()
+        public void PedsInLOS(RunControl runcontrol)
         {
-            List<Ped> allpeds = World.GetAllPeds().Where<Ped>(x => IsInLOS(x)).ToList();
-            peds = allpeds.Select(x => PedSummary.Setup(x)).ToList<PedSummary>();
+            List<Ped> allpeds = World.GetNearbyPeds(runcontrol.camera.Position, 300f).Where(x => IsInLOS(x)).ToList();
+            peds = allpeds.Select(x => PedSummary.Setup(x)).ToList();
         }
         public static bool IsInLOS(Entity entity) => entity.IsOnScreen && !entity.IsOccluded && entity.IsVisible;
     }

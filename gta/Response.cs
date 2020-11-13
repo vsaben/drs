@@ -156,13 +156,13 @@ namespace DRS
         }
 
         // 2: Take picture =======================================================================================================       
-        public static void TakePicture(TestControl testcontrol)
+        public static void TakePicture(RunControl runcontrol, TestControl testcontrol)
         {
             // Function: Take picture of current screen
             // Output: Colour, depth and stencil images
 
             string filepath = ST.GenerateFilePath(testcontrol);                       // [a] Generate file path w/o ext.
-            WriteToTiff.RobustBytesToTiff(filepath);                                  // [b] Take picture                                        
+            WriteToTiff.RobustBytesToTiff(runcontrol, testcontrol, filepath);                     // [b] Take picture                                        
         }
 
         public static void Capture(RunControl runcontrol, TestControl testcontrol, Environment environment, double theta = 0)
@@ -171,17 +171,15 @@ namespace DRS
             // Output: Images and annotations
 
             bool inlos = PositionCam(runcontrol, testcontrol, theta);             // [a] Position camera at random location and directional offset to target             
+            bool negalt = ST.ControlST.GetAltitude(runcontrol.camera) <= 0;
 
-            if (!inlos)
-            {                
-                UI.ShowSubtitle("Not in LOS", 1000);
-                return;
-            }
+            if (!inlos) { UI.ShowSubtitle("Not in LOS", 1000); return; }
+            if (negalt) { UI.ShowSubtitle("Camera has negative altitude", 1000); return; }
 
-            WriteToTiff.PrepareGameBuffer(true);                                      
-            TakePicture(testcontrol);                                             // [b] Take a picture            
+            WriteToTiff.PrepareGameBuffer(runcontrol, testcontrol, true);                                      
+            TakePicture(runcontrol, testcontrol);                                 // [b] Take a picture            
             ST.Save(runcontrol, testcontrol, environment);                        // [c] Extract annotations: Camera, control, environment, target, ped (JSON)
-            WriteToTiff.PrepareGameBuffer(false);
+            WriteToTiff.PrepareGameBuffer(runcontrol, testcontrol, false);
 
             if (testcontrol.iswide) testcontrol.iswidecaptured = true;
         }

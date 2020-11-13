@@ -1,4 +1,6 @@
 ﻿using System.IO;
+using System.Collections.Generic;
+using System.Linq;
 using GTA;
 using GTAVisionUtils;
 using BitMiracle.LibTiff.Classic;
@@ -91,7 +93,12 @@ namespace DRS
 
             /// C: Write to Tiff
 
-            WriteToTiff.Colour(col_path, 1920, 1080, Colour);
+            int W = Game.ScreenResolution.Width;
+            int H = Game.ScreenResolution.Height;
+
+            Script.Wait(1);
+
+            WriteToTiff.Colour(col_path, W, H, Colour);
             WriteToTiff.Depth(dep_path, 1280, 720, Depth);
             WriteToTiff.Stencil(ste_path, 1280, 720, Stencil);
         }
@@ -103,7 +110,7 @@ namespace DRS
             Directory.CreateDirectory(TestControl.OUTPUT_PATH);                                         
             return Path.Combine(TestControl.OUTPUT_PATH, filename);
         }
-        public static void RobustBytesToTiff(string baseimagepath)
+        public static void RobustBytesToTiff(RunControl runcontrol, TestControl testcontrol, string baseimagepath)
         {
             // Function: Catches errors and regenerates BytesToTiff function 
             // Output: BytesToTiff output
@@ -114,27 +121,41 @@ namespace DRS
             }
             catch
             {
-                PrepareGameBuffer(false);
-                PrepareGameBuffer(true);
+                PrepareGameBuffer(runcontrol, testcontrol, false);
+                PrepareGameBuffer(runcontrol, testcontrol, true);
                 BytesToTiff(baseimagepath);
             }
         }
 
         // 2: Prepare game buffer ====================================================================
 
-        public static void PrepareGameBuffer(bool on)
+        public static void PrepareGameBuffer(RunControl runcontrol, TestControl testcontrol, bool on)
         {
             // Function - Output: Prepares game buffers (to be written to Tif files) 
 
             if (on)
             {
+                List<Ped> frozen_peds = World.GetNearbyPeds(runcontrol.camera.Position, 2000f).ToList();
+                List<Vehicle> frozen_vehicles = World.GetNearbyVehicles(runcontrol.camera.Position, 2000f).ToList();
+
+                frozen_vehicles.Where(x => VehicleSelection.ERRONEOUS_VEHICLE_MODELS.Contains(x.Model)).
+                    ToList().ForEach(x => x.Delete());
+
+                testcontrol.frozen_entities = new List<Entity>();
+                testcontrol.frozen_entities.AddRange(frozen_peds);
+                testcontrol.frozen_entities.AddRange(frozen_vehicles);
+                testcontrol.frozen_entities.ForEach(x => x.FreezePosition = true);
+
+                Script.Wait(1500);
+                
                 Game.TimeScale = 0;                           // [a] Slow down time TO avoid pixel drift OR return to normal  
                 Game.Pause(true);                             // [b] Allow game to load sufficiently
             }
             else
             {
-                Game.TimeScale = 1;
                 Game.Pause(false);
+                Game.TimeScale = 1;
+                testcontrol.frozen_entities.ForEach(x => x.FreezePosition = false);                
             }                                           
         }
     }

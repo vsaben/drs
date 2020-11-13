@@ -18,7 +18,8 @@ namespace DRS
 
         public int id;                            // RunControl ID
         public int iterations;                    // Number of tests
-        public string testidrange;                // Test ID range   
+        public string testidrange;                // Test ID range
+        public bool iswideonly;                   // If wide capture only (default = false)
 
         /// B: Time
 
@@ -35,7 +36,7 @@ namespace DRS
 
         public static Vector3 PLAYEROFFSET = new Vector3(5f, 5f, 0f);                           // Default player camera offset 
 
-        public static RunControl Setup(int iter)
+        public static RunControl Setup(int iter, bool iswideonly = false)
         {
             Game.Player.Character.Position = Environment.MAINBASEPOSITION + PLAYEROFFSET;       // [a] Set player at the main base
             Script.Wait(2000);                                                                  // [b] Allow initial base to load 
@@ -56,6 +57,7 @@ namespace DRS
                 id = DB.LastID("RunControl") + 1,
                 iterations = iter,
                 testidrange = (DB.LastID("TestControl") + 1).ToString(),
+                iswideonly = iswideonly,
                 startdatetime = System.DateTime.Now,
                 random = new Random(),
                 camera = cam,

@@ -28,20 +28,8 @@ namespace DRS
         {
             // Function - Output: Save entity, camera, environment and control information to JSON files
 
-            EntitiesInLOS entitiesinlos;
-
-            if (testcontrol.iswide)
-            {
-                World.GetNearbyVehicles(testcontrol.target_vehicle.Position, 50f)
-                    .Where(x => Damage.DamageCheck(x)).ToList().ForEach(x => x.FreezePosition = true);
-
-                testcontrol.entities_wide = EntitiesInLOS.Setup(runcontrol);     // [a.a] Update entities in wide frame
-                entitiesinlos = testcontrol.entities_wide;
-            }
-            else
-            {
-                entitiesinlos = EntitiesInLOS.Setup(runcontrol);                 // [a.b] Update entities in near frame 
-            }
+            EntitiesInLOS entitiesinlos = EntitiesInLOS.Setup(runcontrol);
+            if (testcontrol.iswide) testcontrol.entities_wide = entitiesinlos;
 
             environment.Update();
 

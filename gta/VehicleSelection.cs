@@ -19,8 +19,9 @@ namespace DRS
             // Function - Output: Select random allowable vehicle instance within 5km of the selected drone base 
 
             Vehicle[] nearby_vehicles = World.GetNearbyVehicles(testcontrol.baseposition, 5000f).                      // [a] Nearby vehicles
-                Where(x => ALLOWED_VEHICLE_CLASSES.Contains(x.ClassType)).ToArray();                                   // [b] Allowable vehicle types
-
+                Where(x => ALLOWED_VEHICLE_CLASSES.Contains(x.ClassType) & !ERRONEOUS_VEHICLE_MODELS.Contains(x.Model)).
+                ToArray();                                                                                             // [b] Allowable vehicle types/models
+                                                                                                          
             Vehicle res_vehicle = nearby_vehicles[runcontrol.random.Next(nearby_vehicles.Length)];                     // [c] Select random vehicle
 
             while (res_vehicle is null)
@@ -70,6 +71,15 @@ namespace DRS
         {
             VehicleClass vehicleclass = (VehicleClass)Function.Call<int>(Hash.GET_VEHICLE_CLASS_FROM_NAME, new Model(hash));
             return ALLOWED_VEHICLE_CLASSES.Contains(vehicleclass);                        
-        }          
+        }
+
+        public static List<Model> ERRONEOUS_VEHICLE_MODELS = new List<Model>
+        {
+            new Model(VehicleHash.Taco),
+            new Model(VehicleHash.Panto), 
+            new Model(VehicleHash.RentalBus), 
+            new Model(VehicleHash.Youga), 
+            new Model(VehicleHash.Youga2)
+        };
     }
 }

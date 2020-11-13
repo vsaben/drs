@@ -49,7 +49,7 @@ namespace DRS
 
         public static void MovePlayerToMainBase()
         {
-            WriteToTiff.PrepareGameBuffer(false);
+            // WriteToTiff.PrepareGameBuffer(false);
             
             /// A: Reset player at the main base
             

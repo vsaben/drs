@@ -18,8 +18,12 @@ namespace DRS
 
             if (testcontrol.iswidecaptured)
             {
-                Response.CaptureDamagedVehicles(runcontrol, testcontrol, environment); // [e] Capture damaged target vehicles: 4 x image, 4 x json
-                testcontrol.TestUpdate();                                              // [f] Update time; Delete damaged, target and colliding vehicles; Send DB
+                if (!runcontrol.iswideonly)
+                {
+                    Response.CaptureDamagedVehicles(runcontrol, testcontrol, environment); // [e] Capture damaged target vehicles: 4 x image, 4 x json
+                }
+                
+                testcontrol.TestUpdate();                                                  // [f] Update time; Delete damaged, target and colliding vehicles; Send DB
             }
 
             TestControl.DeleteDamagedVehicles(runcontrol);

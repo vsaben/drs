@@ -40,17 +40,27 @@ namespace DRS
             // Function: Build experiment submenu (takes no. iterations as input)
             // Output: Runs specified number of experiments
 
-            UIMenu carmenu = menupool.AddSubMenu(mainmenu, "Experiment");                     
+            UIMenu drsmenu = menupool.AddSubMenu(mainmenu, "Experiment");
 
-            UIMenuItem iterations = new UIMenuItem("Number of iterations");             
-            carmenu.AddItem(iterations);
+            UIMenuItem wideonlycapture = new UIMenuItem("Wide-view only");
+            drsmenu.AddItem(wideonlycapture);
 
-            carmenu.OnItemSelect += (sender, item, index) =>
+            UIMenuItem fullcapture = new UIMenuItem("Full");
+            drsmenu.AddItem(fullcapture);
+
+            drsmenu.OnItemSelect += (sender, item, index) =>
             {
-                if (item == iterations)
+                if (item == wideonlycapture)
                 {
-                    int numberiterations = System.Convert.ToInt32(Game.GetUserInput(3));
-                    runcontrol = RunControl.Setup(numberiterations);
+                    int iterations = System.Convert.ToInt32(Game.GetUserInput(3));
+                    runcontrol = RunControl.Setup(iterations, true);
+                    Operation.Run(runcontrol);
+                }
+
+                if (item == fullcapture)
+                {
+                    int iterations = System.Convert.ToInt32(Game.GetUserInput(3));
+                    runcontrol = RunControl.Setup(iterations);
                     Operation.Run(runcontrol);
                 }
             };
