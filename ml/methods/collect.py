@@ -100,7 +100,7 @@ class CollectDetection:
         euler = tf.map_fn(quart_to_euler, quart, tf.float32)
         return euler
 
-def collect_dets(camera, outs, cfg):
+def collect_detections(camera, outs, cfg):
 
     outs = outs.unbatch()
     dets = [CollectDetection(camera, out, cfg) for out in outs]

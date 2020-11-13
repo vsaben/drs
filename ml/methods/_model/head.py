@@ -36,6 +36,10 @@ def pyramid_roi_align(rois, fmaps, cfg):
     """Implements ROIAlign Pooling on multiple levels of the yolo feature pyramid
     
     :note: allow gradient propagation through proposals if cfg.USE_RPN_ROIS
+    :note: tf.gather causing UserWarning: Converting sparse IndexedSlices to a 
+            dense Tensor of unknown shape. This may consume a large amount of memory.
+            "Converting sparse IndexedSlices to a dense Tensor of unknown shape. " fix
+            not known
 
     :param rois: [nbatch, cfg.MAX_GT_INSTANCES, (x1, y1, x2, y2)] in normalized coordinates.
     :param fmaps: List of pyramid feature maps, each is [batch, height, width, channels]. 
@@ -73,6 +77,8 @@ def pyramid_roi_align(rois, fmaps, cfg):
         ix = tf.where(eq_ix)                                    # [ndetect_across_nbatch, batch_id + eq_index]
         
         level_boxes = tf.gather_nd(boxes, ix)                   # [ndetect_across_nbatch, 4]
+        print('level_boxes: ', level_boxes) # ADJUST
+
 
         # Box indices for crop_and_resize.
         box_indices = tf.cast(ix[:, 0], tf.int32)               # [ndetect_across_nbatch]
@@ -134,7 +140,7 @@ def TDConv(x, filters, kernel, strides = 1, padding = 'valid'):
 
 # PART C: Head module configurations ============================================================
 
-def PoseGraph(cfg, name=None):
+def PoseGraph(mode, cfg, name=None):
     
     """Builds head pose graph
 
@@ -143,7 +149,9 @@ def PoseGraph(cfg, name=None):
     :result: [nbatch, ndetect, 10]
     """
 
-    x = input = KL.Input([cfg['MAX_GT_INSTANCES'], cfg['POOL_SIZE'], cfg['POOL_SIZE'], cfg['TOP_DOWN_PYRAMID_SIZE']])
+    MODE = 'DET_' if mode == 'detection' else ''
+
+    x = input = KL.Input([cfg[MODE + 'MAX_GT_INSTANCES'], cfg['POOL_SIZE'], cfg['POOL_SIZE'], cfg['TOP_DOWN_PYRAMID_SIZE']])
 
     x = TDConv(x, cfg['FC_LAYERS_SIZE'], 7)
     x = TDConv(x, cfg['FC_LAYERS_SIZE'], 1) 
@@ -155,7 +163,7 @@ def PoseGraph(cfg, name=None):
 
 # PART D: Build DRS head ========================================================================
 
-def RoiAlign(cfg, name=None):
+def RoiAlign(mode, cfg, name=None):
     
     """Computes regions of interest
 
@@ -165,7 +173,9 @@ def RoiAlign(cfg, name=None):
     :result: [nbatch, ndetect, 7, 7, TOP_DOWN_PYRAMID_SIZE]
     """
     
-    rois = KL.Input([cfg['MAX_GT_INSTANCES'], 4])
+    MODE = 'DET_' if mode == 'detection' else ''
+
+    rois = KL.Input([cfg[MODE + 'MAX_GT_INSTANCES'], 4])
 
     nscale = len(cfg['MASKS'])
     grid_small = cfg['IMAGE_SIZE'] // 32             # smallest grid size 
@@ -263,7 +273,7 @@ class OutLayer(KL.Layer):
                        center (2) + depth (1) + dims (3) + quart (4) [HEAD]]
         """
 
-        nms, pd_pose = inputs
+        nms, pd_pose = inputs 
         
         rpn_roi, scores, classes, nvalid = nms
 
@@ -272,7 +282,8 @@ class OutLayer(KL.Layer):
 
         padded_out = tf.concat([rpn_roi, scores, classes, pd_pose], axis=-1, name='out_padded') # [nbatch, cfg.MAX_GT_INSTANCES, 16]
         mask = tf.not_equal(tf.gather(padded_out, 2, axis=-1), 0, name='out_mask')              # [nbatch, cfg.MAX_GT_INSTANCES]      
-        out = tf.ragged.boolean_mask(padded_out, mask, name='out')               
+        out = tf.ragged.boolean_mask(padded_out, mask, name='out')    
+        print('out: ', out) # ADJUST
         return nvalid, out
 
 #def build_drs_head(rois, feature_maps, cfg):

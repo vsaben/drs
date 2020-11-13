@@ -77,7 +77,7 @@ def main(_argv):
     setattrs(cfg, MODEL_DIR = model_dir, 
                   LOG_DIR = log_dir)
 
-    cfg.display()
+    cfg.display('training')
   
     # C: Load data ========================================================================================
            
@@ -113,19 +113,23 @@ def main(_argv):
     from methods.data import load_ds
     from methods.model import DRSYolo 
 
-    cfg = Config.restore("./models/default")
+    cfg = Config.restore("./models/default")    
+    setattrs(cfg, EPOCHS = 2, 
+                  BATCH_SIZE = 4, 
+                  MODEL_DIR = "./models/default", 
+                  LOG_DIR = "./models/default/logs") 
+    
+    cfg.display('training')
 
-    #with tf.device('/CPU:0'):
-    #    train_ds = load_ds("./data/", istrain = True, cfg=cfg)
-    #    val_ds = load_ds("./data/", istrain = False, cfg=cfg)
+    with tf.device('/CPU:0'):
+        train_ds = load_ds("./data/", istrain = True, cfg=cfg)
+        val_ds = load_ds("./data/", istrain = False, cfg=cfg)
 
-    #list(val_ds.as_numpy_iterator())
-    #x = list(train_ds.take(1))[0]    
+    x = list(val_ds.take(3))[0]    
+    print(x)
 
     cfg_mod = cfg.to_dict()
-
-    #model = DRSYolo(mode="training", cfg=cfg_mod)
-    #model = DRSYolo(mode="detection", cfg=cfg_mod)        
+    model = DRSYolo(mode="detection", cfg=cfg_mod)        
     model.build()
 
     #model.summary()

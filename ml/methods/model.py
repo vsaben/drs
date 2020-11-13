@@ -19,7 +19,7 @@ import tensorflow.keras.metrics as KM
 import tensorflow.keras.regularizers as KR    
 import tensorflow.keras.callbacks as KC
 
-from methods._model.yolo import build_yolo_graph
+from methods._model.yolo import YoloGraph
 from methods._model.head import RoiAlign, PoseGraph, DetectionTargetsLayer, OutLayer
 from methods._data.targets import transform_targets
 from methods._data import convert
@@ -55,6 +55,7 @@ class DRSYolo():
         :input_pose:      [nbatch, cfg.MAX_GT_INSTANCES, center [2] + depth [1] + dims [3] + quart [4]]       
         """
 
+        mode = self.mode
         cfg = self.cfg
 
         # Inputs
@@ -72,7 +73,7 @@ class DRSYolo():
             
         # RPN
         
-        rpn_fmaps, pd_boxes, nms = build_yolo_graph(input_image, cfg)    
+        rpn_fmaps, pd_boxes, nms = YoloGraph(input_image, mode, cfg)    
         rpn_roi = nms[0]
 
         if self.mode == "training":
@@ -80,18 +81,18 @@ class DRSYolo():
         #    if cfg.USE_RPN_ROI:            
         #        gt_pose, gt_od = DetectionTargetsLayer(cfg, name = 'extract_pose_od')([rpn_roi, gt_boxes])
         #    else:
-            
+
             rpn_roi = gt_od[..., :4]                     # [nbatch, cfg.MAX_GT_INSTANCES, (x1, y1, x2, y2)] 
 
-        roi_align = RoiAlign(cfg, name='roi_align')([rpn_roi, rpn_fmaps])         
+        roi_align = RoiAlign(mode, cfg, name='roi_align')([rpn_roi, rpn_fmaps])         
         
         # HEAD
 
-        pd_pose = PoseGraph(cfg, name='pose_graph')([roi_align])        # [nbatch, cfg.MAX_GT_INSTANCES, 10] 
+        pd_pose = PoseGraph(mode, cfg, name='pose_graph')([roi_align])        # [nbatch, cfg.MAX_GT_INSTANCES, 10] 
                       
         if self.mode == 'detection': 
-            outs = OutLayer(name='out')([nms, pd_pose])
-            return K.Model(input_image, outs, name='drs_yolo')
+            outs = OutLayer(name='out')([nms, pd_pose]) 
+            return K.Model(input_image, outs, name='drs_yolo') 
         
         # METRICS
 
@@ -115,6 +116,9 @@ class DRSYolo():
 
         if self.mode == 'training' and not transfer:
             self.freeze_darknet_layers()
+
+        if self.mode in ['inference', 'detection']:
+            self.model.trainable = False
                     
         self.load_weights(optimiser=not transfer)
         

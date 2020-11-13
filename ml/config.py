@@ -231,19 +231,15 @@ class Config(object):
 
     QUANTISATION = 'none'
 
-    
-
-
     """F: Detection ============================================================"""
     
     # Maximum number of possible detections in a single image. See MAX_GT_INSTANCES.
-    
+
     DET_MAX_GT_INSTANCES = 50
 
     DET_RPN_SCORE_THRESHOLD = 0.7
 
     DET_RPN_IOU_THRESHOLD = 0.7
-
 
     # Number of training steps per epoch
     # This doesn't need to match the size of the training set. Tensorboard
@@ -312,7 +308,7 @@ class Config(object):
 
         file_name = os.path.join(self.MODEL_DIR, "config.json")        
         with open(file_name, 'w') as f:
-            json.dump(self.__dict__, f, sort_keys=True, indent=4)  
+            json.dump(self.to_dict(), f, sort_keys=True, indent=4)  
             
     def restore(model_dir):
         file_name = os.path.join(model_dir, "config.json")
@@ -326,27 +322,20 @@ class Config(object):
        
         return cfg 
 
-    def display(self):
+    def display(self, mode):
         
         """Display configuration values"""
         
+        mode_cond = lambda attr: attr.startswith('DET_') if mode == 'detection' else True    
+
         print("\nConfigurations:")
         for attr in dir(self):
-            if attr.isupper(): 
+            if attr.isupper() and mode_cond(attr): 
                 print("{:30} {}".format(attr, getattr(self, attr)))
         print("\n")
 
     def to_dict(self):
         return {attr: getattr(self, attr) for attr in dir(self) if attr.isupper()}
-
-    def strip(self):
-
-        cfg_mod = ConfigModel()
-
-        for k, v in self.__dict__.items():
-            setattr(cfg_mod, k, v)
-
-        return cfg_mod
 
 def UpdateConfigYolo(cfg):               
     

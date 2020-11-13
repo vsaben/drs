@@ -45,6 +45,8 @@ def main(_argv):
     cfg = Config.restore(model_dir)
     setattr(cfg, "MODEL_DIR", model_dir)
 
+    cfg.display(FLAGS.mode)
+
     logging.info('model configuration restored')
 
     # PART A: Build model ================================
@@ -65,9 +67,13 @@ def main(_argv):
    
     x, camera = ds.as_numpy_iterator().next()
 
+    print('R: ', camera['R']) # ADJUST
+
     # PART C: Process outputs ============================
     
     nvalids, outs = model.predict(x)
+
+    print(outs) # ADJUST
 
     nvalids = nvalids.numpy()
     logging.info('image detections: {} | time: {:.4f}'.format(nvalids, time.time() - t))

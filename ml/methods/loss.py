@@ -297,7 +297,8 @@ def compute_pose_losses(pd_pose, gt_pose, cfg):
      :note: add configuration (cfg) to allow for different loss functions
     """
 
-    gt_cond = tf.gather(gt_pose, 7, axis = -1)    # [nbatch, 40]
+    #gt_cond = tf.gather(gt_pose, 7, axis = -1)    # [nbatch, 40]
+    gt_cond = gt_pose[..., 7]                      # [nbatch, 40]
 
     positive_ix = tf.where(gt_cond > 0)           # [none, 2] --> (instance index, cond true index)
 

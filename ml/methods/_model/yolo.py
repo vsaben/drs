@@ -354,9 +354,10 @@ class YoloBox(KL.Layer):
         return config
  
 class YoloNMS(KL.Layer):
-    def __init__(self, cfg, name=None, *args, **kwargs):
+    def __init__(self, mode, cfg, name=None, *args, **kwargs):
         super(YoloNMS, self).__init__(name=name, *args, **kwargs)
-        self.cfg = cfg
+        self.mode = mode
+        self.cfg = cfg        
 
     def call(self, inputs):        
 
@@ -381,13 +382,15 @@ class YoloNMS(KL.Layer):
 
         scores = conf * clsp
 
+        MODE = 'DET_' if self.mode == 'detection' else ''
+
         boxes, scores, classes, nvalid = tf.image.combined_non_max_suppression(
             boxes=tf.reshape(bbox, (tf.shape(bbox)[0], -1, 1, 4)),
             scores=tf.reshape(scores, (tf.shape(scores)[0], -1, tf.shape(scores)[-1])),
-            max_output_size_per_class=self.cfg['MAX_GT_INSTANCES'], 
-            max_total_size=self.cfg['MAX_GT_INSTANCES'],
-            iou_threshold=self.cfg['RPN_IOU_THRESHOLD'],
-            score_threshold=self.cfg['RPN_SCORE_THRESHOLD']
+            max_output_size_per_class=self.cfg[MODE + 'MAX_GT_INSTANCES'], 
+            max_total_size=self.cfg[MODE + 'MAX_GT_INSTANCES'],
+            iou_threshold=self.cfg[MODE + 'RPN_IOU_THRESHOLD'],
+            score_threshold=self.cfg[MODE + 'RPN_SCORE_THRESHOLD']
         )
 
         # [y1, x1, y2, x2] --> [x1, y1, x2, y2]
@@ -399,18 +402,18 @@ class YoloNMS(KL.Layer):
 
     def get_config(self):
         config = super(YoloNMS, self).get_config()
-        config.update({'cfg': self.cfg})        
+        config.update({'mode': self.mode, 
+                       'cfg': self.cfg})        
         return config
 
 # PART E: Build yolo graph ============================================================================
 
-def build_yolo_graph(input_image, cfg):
+def YoloGraph(input_image, mode, cfg):
     yolo_graph = eval(cfg['BACKBONE']) 
     rpn_fmaps, outs = yolo_graph(cfg)(input_image)
     pd_boxes = YoloBox(cfg, name = 'yolo_box')(outs)
-    nms = YoloNMS(cfg, name = 'yolo_nms')(pd_boxes)    
+    nms = YoloNMS(mode, cfg, name = 'yolo_nms')(pd_boxes)    
     return rpn_fmaps, pd_boxes, nms
-
   
                 
         
