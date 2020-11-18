@@ -6,13 +6,17 @@
     - PART C: Visualise target instances and create annotation files
 """
 
-from data import read_data
+from pathlib import Path
+
+from data import read_data, move_test_files
 from utils import Camera
 from target import generate_targets
 from visualise import draw_annotations
 from annotations import write_txt, write_tfrecord
 
-def annotate(basepath, save_image = False, save_tfrecord = False, save_txt = False):
+import os
+
+def annotate(basepath, save_image = False, save_tfrecord = False, save_txt = False, sort_filter = False):
 
     """Prepare, visualise and save annotations
 
@@ -28,8 +32,9 @@ def annotate(basepath, save_image = False, save_tfrecord = False, save_txt = Fal
 
     isvalid, data, control, col_img, col_bytes, ste_arr = read_data(basepath)      
     if not isvalid: 
-        print('invalid instance: ', basepath)
-        return
+        files = [str(d) for d in Path(basepath).glob('*')]
+        move_test_files(files, 'error', levelup = 0)
+        return 'error'
 
     # PART B: Extract camera and environment properties; target instances
 
@@ -51,5 +56,23 @@ def annotate(basepath, save_image = False, save_tfrecord = False, save_txt = Fal
     if save_tfrecord: write_tfrecord(basepath, col_bytes, environment, camera, targets) 
     if save_txt: write_txt(basepath, control, environment, camera, targets)
 
+    if save_image and sort_filter:
+        
+        # Raw: Leave files in folder
 
+        # Filter
+
+        files = [basepath + '_colour.jpeg', 
+                 basepath + '_annotated.jpeg']
+
+        move_test_files(files, 'filter', levelup = 1)
+       
+        # Output
+
+        files = [basepath + '.tfrecord', 
+                 basepath + '.txt']
+
+        move_test_files(files, 'output', levelup = 1)
+
+    return 'filter'
 

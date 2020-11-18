@@ -13,7 +13,7 @@ import os
 import argparse
 
 from image import annotate
-from files import get_names, change_files
+from files import get_names, change_files, move_files
 
 # PART A: Shared =======================================================================================================
 
@@ -52,6 +52,7 @@ ann_parser.add_argument("-o", "--output_dir", type=str, default=False, required=
 ann_parser.add_argument("-a", "--annotated", action="store_true", help="save annotated image")
 ann_parser.add_argument("-tf", "--tfrecord", action="store_true", help="save tfrecord")
 ann_parser.add_argument("-tx", "--txt", action="store_true", help="save txt file")
+ann_parser.add_argument("-s", "--sort", action="store_true", help="sort annotated and colour images for flitering")
 
 # PART D: Main ==========================================================================================================
 
@@ -61,10 +62,15 @@ names = get_names(args.id_min, args.id_max)
 basepaths = [os.path.join(args.input_dir, d) for d in names]
 
 if args.cmd == 'F': change_files(args, basepaths)    
-if args.cmd == 'A':                
+if args.cmd == 'A':               
+    
     for d in basepaths:
-        annotate(d, save_image = args.annotated, 
-                    save_tfrecord = args.tfrecord, 
-                    save_txt = args.txt)
+        status = annotate(d, save_image = args.annotated, 
+                             save_tfrecord = args.tfrecord, 
+                             save_txt = args.txt, 
+                             sort_filter = args.sort)
+
+        
+
 
 

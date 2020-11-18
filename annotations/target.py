@@ -186,8 +186,8 @@ class Target(object):
         regy[1] = None if regy[1] == (shapey - 1) else regy[1] + 1
 
         ste_reg = ste_arr.T[regx[0]:regx[1], regy[0]:regy[1]]
-        ste_che = ((Target.StenCode.car.value in ste_reg) 
-                   or (Target.StenCode.created_car.value in ste_reg))       
+        ste_che = ste_reg.any()
+            #(Target.StenCode.car.value in ste_reg) or (Target.StenCode.created_car.value in ste_reg))       
         return ste_che
      
     @staticmethod

@@ -3,12 +3,17 @@
                  Delete invalid tests.   
 """
 
+from files import move_files
+
 from PIL import Image
+from pathlib import Path
 
 import json
 import os
+import shutil
 import numpy as np 
 import matplotlib.pyplot as plt
+import matplotlib.cm as cm
 import tensorflow as tf
 
 def read_data(basepath):
@@ -34,13 +39,17 @@ def read_data(basepath):
     cam_altitude = int(control["assess_factors"]["altitude"]) 
     if cam_altitude <= 0: 
         del data
-        remove_test_files(basepath)
-        print("Camera below ground, {:s} deleted".format(basepath))
+        print("{s}: {s} moved to error folder".format(ERROR_DICT['camera'], 
+                                                      basepath))
         return [False]*6  
 
     col_img, col_bytes = read_jpeg(basepath)
     ste_arr = read_stencil(basepath)
     return True, data, control, col_img, col_bytes, ste_arr
+
+# Error assessment
+
+ERROR_DICT = {'camera': 'Camera below ground'}
 
 def read_json(basepath):
     
@@ -74,11 +83,12 @@ def tif_to_jpeg(basepath, resize_dims = None):
     :result: saved colour image .jpeg file (same directory)
     """
 
-    tif_file = basepath + "_colour.tif"
+    tif_path = basepath + "_colour.tif"
+    image_path = basepath + "_colour.jpeg" 
 
     # Convert: Image to array
 
-    image_raw = Image.open(tif_file)
+    image_raw = Image.open(tif_path)
     image_array = np.array(image_raw)
     image_rgb = image_array[:, :, 0:3]        
     
@@ -87,30 +97,35 @@ def tif_to_jpeg(basepath, resize_dims = None):
         image_rgb = np.array(resized_image)
 
     # Convert: Array to jpeg
-
-    image_path_jpeg = image_path[:-3] + "jpeg"        
-    plt.imsave(image_path_jpeg, image_rgb)
-    print(image_path_jpeg)
+           
+    plt.imsave(image_path, image_rgb)
+    print(image_path)
 
 def read_stencil(basepath):
 
-    """Read in stencil array"""
+    """Read in and save (if not exist) stencil array"""
 
     file = basepath + "_stencil.tif"     
     ste_img = Image.open(file, "r")
-    ste_arr = np.array(ste_img, dtype = np.uint8)    
-    return ste_arr
+    ste_arr = np.array(ste_img, dtype = np.uint8)
+    msk_arr = np.isin(ste_arr, [2, 130])
 
-def remove_test_files(basepath):
+    ste_path = basepath + "_stencil.jpeg"
+    if not os.path.isfile(ste_path):
+        plt.imsave(ste_path, msk_arr, cmap=cm.gray)
+        print(ste_path)
+    return msk_arr
 
-    """Remove all files associated with a test"""
+def move_test_files(files, folder, levelup = 0):
 
-    split_ind = basepath.rfind("\\") + 1 
-    base = basepath[:split_ind]
-    test = basepath[split_ind:]
-    
-    test_files = [os.remove(d) for d in Path(base).glob("{}*".format(test))]
-    print("Deleted: ", test)
+    """Move all files associated with a test"""
+ 
+    parent = Path(files[0]).parents[levelup]
+    out_dir = os.path.join(parent, folder) 
+    if not os.path.isdir(out_dir):
+        os.mkdir(out_dir)
+
+    move_files(files, out_dir, False)
 
 
 
