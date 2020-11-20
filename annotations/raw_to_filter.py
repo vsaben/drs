@@ -3,10 +3,9 @@
 
     Sample cmd instructions: 
 
-        single instance: ./data/raw/ 1 -o ./data/examples/ -a -tx
-            
-    
-        raw_to_filter: ./data/raw/ U  
+        single instance: python raw_to_filter.py ./data/raw/ 1 -o ./data/examples/ -a -tx
+              
+        raw_to_filter: python raw_to_filter.py ./data/raw/ U  
             updates all filter, output and tfrecord files
             and sorts them by:
                 raw: correct + error 
@@ -26,7 +25,7 @@ from methods.image import annotate
 from methods.files import get_name, extract_name, get_basepath_diff
 
 parser = argparse.ArgumentParser()
-parser.add_argument('input_dir', type=str)
+parser.add_argument('raw_dir', type=str, help='raw directory')
 
 subparsers = parser.add_subparsers(help="annotate a single image or perform raw_to_filter directory update", dest="cmd")
 
@@ -52,7 +51,7 @@ def main(_argv):
     if args.cmd == 'S':
 
         name = get_name(args.id)
-        basepath = os.path.join(args.input_dir, name)
+        basepath = os.path.join(args.raw_dir, name)
 
         test_file = os.path.join(basepath, '.json')
         if not os.path.isfile(test_file):
@@ -65,20 +64,20 @@ def main(_argv):
 
     elif args.cmd == 'U':
 
-        parent_dir = os.path.dirname(os.path.normpath(args.input_dir))
+        parent_dir = os.path.dirname(os.path.normpath(args.raw_dir))
         output_dir = os.path.join(parent_dir, 'filter')
 
         if os.path.isdir(output_dir):
 
-            basepaths = get_basepath_diff(args.input_dir, 
-                                          args.input_dir, 
+            basepaths = get_basepath_diff(args.raw_dir, 
+                                          args.raw_dir, 
                                           inext='.json', 
                                           outext='_stencil.jpeg')
 
         else:
 
             basepaths = [extract_name(d, isbasepath=True) for d in 
-                         Path(args.input_dir).glob('*.json')]
+                         Path(args.raw_dir).glob('*.json')]
 
         print("new basepaths: {}".format(basepaths))
 

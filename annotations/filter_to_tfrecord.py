@@ -53,8 +53,6 @@ def main(_argv):
         out_files = list(chain.from_iterable([[d + '.txt', d + '.tfrecord'] 
                                               for d in out_basepaths]))
 
-        print('out_files: ', out_files) # ADJUST
-
         move_test_files(out_files, 'error', levelup=0)
 
     # Move valid tfrecords to a tfrecords folder
