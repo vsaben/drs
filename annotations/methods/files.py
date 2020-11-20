@@ -84,7 +84,7 @@ def move_files(files, output_dir, iscopy=True):
     op = shutil.copy if iscopy else shutil.move
 
     for file in files:
-        name = file[(file.rfind("\\") + 1):]       
+        name = os.path.basename(file)    
         new_path = os.path.join(output_dir, name)
         op(file, new_path)
         print(new_path)

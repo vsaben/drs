@@ -167,12 +167,11 @@ def collect_valid_tfrecords(outdir):
 
 # PART C: Train-validation split ================================================
 
-def set_split(tfrecorddir, per_train):
+def set_split(tfrecords, per_train):
 
     """Splits 'tfrecords' files into 'train' and 'val' folders 
     (at the same level) randomly"""
 
-    tfrecords = [str(d) for d in Path(tfrecorddir).glob('*.tfrecord')]
     random.shuffle(tfrecords)
 
     nsplit = int(round(per_train * len(tfrecords)))
