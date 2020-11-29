@@ -16,7 +16,6 @@
 import os
 import argparse
 
-from absl import app
 from pathlib import Path
 from itertools import chain
 
@@ -25,7 +24,7 @@ from methods.image import annotate
 from methods.files import get_name, extract_name, get_basepath_diff
 
 parser = argparse.ArgumentParser()
-parser.add_argument('raw_dir', type=str, help='raw directory')
+parser.add_argument('rawdir', type=str, help='raw directory')
 
 subparsers = parser.add_subparsers(help="annotate a single image or perform raw_to_filter directory update", dest="cmd")
 
@@ -34,7 +33,6 @@ subparsers = parser.add_subparsers(help="annotate a single image or perform raw_
 single_parser = subparsers.add_parser('S', help = "generates annotation files for a single test instance")
 single_parser.add_argument("id", type=int)
 
-single_parser.add_argument("-o", "--output_dir", type=str, default=False, required=False) # If specified, change output directory of processed files
 single_parser.add_argument("-a", "--annotated", action="store_true", help="save annotated image")
 single_parser.add_argument("-tf", "--tfrecord", action="store_true", help="save tfrecord")
 single_parser.add_argument("-tx", "--txt", action="store_true", help="save txt file")
@@ -43,17 +41,17 @@ single_parser.add_argument("-tx", "--txt", action="store_true", help="save txt f
 
 update_parser = subparsers.add_parser('U', help = 'perform raw_to_filter directory update')
 
-
-def main(_argv):
+def main():
 
     args = parser.parse_args()
 
     if args.cmd == 'S':
 
         name = get_name(args.id)
-        basepath = os.path.join(args.raw_dir, name)
+        basepath = os.path.join(args.rawdir, name)
 
-        test_file = os.path.join(basepath, '.json')
+        test_file = basepath + '.json'
+
         if not os.path.isfile(test_file):
             print("some/all raw data for test {:d} not found")
             return
@@ -64,20 +62,20 @@ def main(_argv):
 
     elif args.cmd == 'U':
 
-        parent_dir = os.path.dirname(os.path.normpath(args.raw_dir))
+        parent_dir = os.path.dirname(os.path.normpath(args.rawdir))
         output_dir = os.path.join(parent_dir, 'filter')
 
         if os.path.isdir(output_dir):
 
-            basepaths = get_basepath_diff(args.raw_dir, 
-                                          args.raw_dir, 
+            basepaths = get_basepath_diff(args.rawdir, 
+                                          args.rawdir, 
                                           inext='.json', 
                                           outext='_stencil.jpeg')
 
         else:
 
             basepaths = [extract_name(d, isbasepath=True) for d in 
-                         Path(args.raw_dir).glob('*.json')]
+                         Path(args.rawdir).glob('*.json')]
 
         print("new basepaths: {}".format(basepaths))
 
@@ -102,10 +100,7 @@ def main(_argv):
 
         move_test_files(out_files, 'output', levelup = 1)
 
-if __name__ == '__main__':
-    try:
-        app.run(main)
-    except SystemExit:
-        pass
+
+main()
 
 
