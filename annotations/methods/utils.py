@@ -35,8 +35,10 @@ class Camera(object):
                
         self.w = camera["screenW"]
         self.h = camera["screenH"]
+        
+        factor = 1 # Investigated (refer pull_factor)
 
-        self.vfov = np.radians(camera["vfov"], dtype=np.float64)        
+        self.vfov = np.radians(camera["vfov"]*factor, dtype=np.float64)        
         self.fy = 1/np.tan(self.vfov/2)
         self.fx = self.h/self.w * self.fy
  
