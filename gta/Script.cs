@@ -52,15 +52,17 @@ namespace DRS
             {
                 if (item == wideonlycapture)
                 {
+                    string outdir = Game.GetUserInput("D:\\wide\\raw\\", 50);
                     int iterations = System.Convert.ToInt32(Game.GetUserInput(3));
-                    runcontrol = RunControl.Setup(iterations, true);
+                    runcontrol = RunControl.Setup(iterations, outdir, true);
                     Operation.Run(runcontrol);
                 }
 
                 if (item == fullcapture)
                 {
+                    string outdir = Game.GetUserInput("D:\\full\\raw\\", 50);
                     int iterations = System.Convert.ToInt32(Game.GetUserInput(3));
-                    runcontrol = RunControl.Setup(iterations);
+                    runcontrol = RunControl.Setup(iterations, outdir);
                     Operation.Run(runcontrol);
                 }
             };
@@ -75,8 +77,8 @@ namespace DRS
             IDictionary<string, string> fileloc = new Dictionary<string, string>
             {
                 {"GTA V", "D:\\Steam\\steamapps\\common\\Grand Theft Auto V"},
-                {"Image Database", "D:\\ImageDB" },
-                {"DRS", "C:\\Users\\Vaughn\\projects\\work\\DRS" }
+                {"Image Database", "D:\\wide" },
+                {"DRS", "C:\\Users\\Vaughn\\projects\\work\\drs" }
             };
 
             List<dynamic> filelist = fileloc.Keys.ToList<dynamic>();
