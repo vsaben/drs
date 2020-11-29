@@ -10,11 +10,14 @@ namespace DRS
             // Function: Run a single experiment
             // Output: 1 x wide jpeg/json, 4 x close jpeg/json
 
-            TestControl testcontrol = TestControl.Setup();                         // [a] Setup simulation
+            TestControl testcontrol = TestControl.Setup(runcontrol);               // [a] Setup simulation
             Environment environment = Environment.Setup(runcontrol, testcontrol);  // [b] Initialise environment AND move player to the drone base
             Collision.Cause(runcontrol, testcontrol);                              // [c] Cause a collision between a target and colliding vehicle
 
-            Response.Capture(runcontrol, testcontrol, environment);                // [d] Capture wide image: image, json
+            if (testcontrol.iscollisioninstances)
+            {
+                Response.Capture(runcontrol, testcontrol, environment);            // [d] Capture wide image: image, json
+            }
 
             if (testcontrol.iswidecaptured)
             {
@@ -26,9 +29,9 @@ namespace DRS
                 testcontrol.TestUpdate();                                                  // [f] Update time; Delete damaged, target and colliding vehicles; Send DB
             }
 
-            TestControl.DeleteDamagedVehicles(runcontrol);
+            TestControl.RemoveDamagedPersistedVehicles(runcontrol, testcontrol);
             RunControl.RenderCreatedCameras(false);                                // [g] Switch to player camera
-            Script.Wait(2000);                                                     // [h] Create distinction between successive tests
+            Script.Wait(2500);                                                     // [h] Create distinction between successive tests
         }
 
         public static void Run(RunControl runcontrol)

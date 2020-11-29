@@ -1,7 +1,4 @@
 ﻿using System;
-using System.Drawing;
-using System.Collections.Generic;
-using System.Linq;
 using System.Data.SqlClient;
 
 using GTA;
@@ -13,6 +10,8 @@ namespace DRS
     public class RunControl
     {
         // 0: Properties ==========================================================================
+
+        public string outdir;                     // Output directory
 
         /// A: Run Control Information
 
@@ -36,7 +35,7 @@ namespace DRS
 
         public static Vector3 PLAYEROFFSET = new Vector3(5f, 5f, 0f);                           // Default player camera offset 
 
-        public static RunControl Setup(int iter, bool iswideonly = false)
+        public static RunControl Setup(int iter, string outdir, bool iswideonly = false)
         {
             Game.Player.Character.Position = Environment.MAINBASEPOSITION + PLAYEROFFSET;       // [a] Set player at the main base
             Script.Wait(2000);                                                                  // [b] Allow initial base to load 
@@ -54,6 +53,7 @@ namespace DRS
 
             RunControl runcontrol = new RunControl()
             {
+                outdir=outdir,
                 id = DB.LastID("RunControl") + 1,
                 iterations = iter,
                 testidrange = (DB.LastID("TestControl") + 1).ToString(),

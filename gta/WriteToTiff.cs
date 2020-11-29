@@ -70,12 +70,12 @@ namespace DRS
                 t.Flush();
             }
         }
-        public static void BytesToTiff(string filename)
+        public static void BytesToTiff(RunControl runcontrol, string filename)
         {
             // Function: Write all buffers to Tif files
             // Output: Colour (1920 x 1080), depth and stencil (1280 x 720) tif images
 
-            string basepath = BasePath(filename); 
+            string basepath = Basepath(runcontrol, filename); 
 
             /// A: Obtain buffers
 
@@ -102,13 +102,13 @@ namespace DRS
             WriteToTiff.Depth(dep_path, 1280, 720, Depth);
             WriteToTiff.Stencil(ste_path, 1280, 720, Stencil);
         }
-        public static string BasePath(string filename)
+        public static string Basepath(RunControl runcontrol, string filename)
         {
             // Function: Create directory (if it does exist)
             // Output: Base path
 
-            Directory.CreateDirectory(TestControl.OUTPUT_PATH);                                         
-            return Path.Combine(TestControl.OUTPUT_PATH, filename);
+            Directory.CreateDirectory(runcontrol.outdir);                                         
+            return Path.Combine(runcontrol.outdir, filename);
         }
         public static void RobustBytesToTiff(RunControl runcontrol, TestControl testcontrol, string baseimagepath)
         {
@@ -117,13 +117,13 @@ namespace DRS
 
             try
             {
-                BytesToTiff(baseimagepath);
+                BytesToTiff(runcontrol, baseimagepath);
             }
             catch
             {
                 PrepareGameBuffer(runcontrol, testcontrol, false);
                 PrepareGameBuffer(runcontrol, testcontrol, true);
-                BytesToTiff(baseimagepath);
+                BytesToTiff(runcontrol, baseimagepath);
             }
         }
 
@@ -146,7 +146,7 @@ namespace DRS
                 testcontrol.frozen_entities.AddRange(frozen_vehicles);
                 testcontrol.frozen_entities.ForEach(x => x.FreezePosition = true);
 
-                Script.Wait(1500);
+                Script.Wait(2000);
                 
                 Game.TimeScale = 0;                           // [a] Slow down time TO avoid pixel drift OR return to normal  
                 Game.Pause(true);                             // [b] Allow game to load sufficiently

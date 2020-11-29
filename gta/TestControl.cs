@@ -6,16 +6,13 @@ using System.IO;
 
 using GTA;
 using GTA.Math;
-using GTA.Native;
 
 namespace DRS
 {
     public class TestControl
     {
-        public static string OUTPUT_PATH = "D:\\ImageDB\\Surveillance\\";    // Image, JSON output path 
-
         public int id;
-        public string base_filename;                                         // File name w/o specification and ext
+        public string basepath;                                              // File name w/o specification and ext (outdir + 6-digit no.)
         public Vector3 baseposition;                                         // Drone base position 
 
         /// A: Test time
@@ -39,10 +36,11 @@ namespace DRS
         public DamagedInstance damaged_instance;
         public bool iswide;                                                 // Wide or near camera angle
         public bool iswidecaptured;                                         // Wide view captured
+        public bool iscollisioninstances;                                   // Determine if collision instances
 
         // 1: Setup and update =========================================================================================
 
-        public static TestControl Setup()
+        public static TestControl Setup(RunControl runcontrol)
         {
             // Function - Output: Setup and output TestControl instance
 
@@ -54,10 +52,11 @@ namespace DRS
                 teststarttime = DateTime.Now,                   // [b] Record test start time
                 damaged_instance = DamagedInstance.Setup(),     // [c] Current damage id [near capture]
                 iswide = true,                                  // [d] Wide or near camera angle 
-                iswidecaptured = false                          // [e] Check if wide view captured
+                iswidecaptured = false,                         // [e] Check if wide view captured
+                iscollisioninstances = false
             };
 
-            testcontrol.GenerateBaseFilePath();                 // [d] Generate base file path: Output path + 6-digit ID 
+            testcontrol.GenerateBasepath(runcontrol);           // [f] Generate base file path: Output path + 6-digit ID 
 
             return testcontrol;
         }
@@ -72,17 +71,24 @@ namespace DRS
             ToDB();           
         }
 
-        public static void DeleteDamagedVehicles(RunControl runcontrol)
+        public static void RemoveDamagedPersistedVehicles(RunControl runcontrol, TestControl testcontrol)
         {
             // Function - Output: Deletes damaged (in and out of LOS) vehicles
 
-            World.GetNearbyVehicles(runcontrol.camera.Position, 1000f)
-                .Where(x => Damage.DamageCheck(x)).ToList().ForEach(x => x.Delete());
+            if (testcontrol.iscollisioninstances)
+            {
+                if (testcontrol.target_vehicle.Exists()) { testcontrol.target_vehicle.Delete(); };
+                if (testcontrol.colliding_vehicle.Exists()) { testcontrol.colliding_vehicle.Delete(); };
+            }           
+           
+            Vehicle[] nearbyvehicles = World.GetNearbyVehicles(runcontrol.camera.Position, 1000f);
+            nearbyvehicles.ToList().ForEach(x => x.MarkAsNoLongerNeeded());
+            nearbyvehicles.Where(x => Damage.DamageCheck(x)).ToList().ForEach(x => x.Delete());        
         }
 
         // 3: File name ============================================================================================
         
-        public void GenerateBaseFilePath() => base_filename = OUTPUT_PATH + IntToIDString(6, id);
+        public void GenerateBasepath(RunControl runcontrol) => basepath = runcontrol.outdir + IntToIDString(6, id);
 
         public static string IntToIDString(int length, int number)
         {

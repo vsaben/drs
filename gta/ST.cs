@@ -62,7 +62,7 @@ namespace DRS
             string specification = testcontrol.iswide ? "W00RD" :
                 "D" + TestControl.IntToIDString(2, testcontrol.damaged_instance.id) + PosNameDict[testcontrol.damaged_instance.dam_pos];
 
-            string filepath = testcontrol.base_filename + specification + ext;
+            string filepath = testcontrol.basepath + specification + ext;
             return filepath;
         }
         public static void ToJSON(TestControl testcontrol, ST st)

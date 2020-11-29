@@ -15,23 +15,58 @@ namespace DRS
         {
             // Function - Output: Cause a collision between a target and colliding vehicle; Wait for the collision to end
 
-            SelectTarget(runcontrol, testcontrol);                                                              // [a] Select target and insert player into any seat
-            Create(runcontrol, testcontrol);                                                                    // [b] Create collision between target and colliding vehicle
+            Vehicle[] nearbyvehicles = World.GetNearbyVehicles(testcontrol.baseposition, 5000f).                      // [a] Nearby vehicles
+                Where(x => VehicleSelection.ALLOWED_VEHICLE_CLASSES.Contains(x.ClassType) & 
+                           !VehicleSelection.ERRONEOUS_VEHICLE_MODELS.Contains(x.Model)).ToArray();
+            nearbyvehicles.ToList().Select(x => x.FreezePosition = true);
+
+            SelectTarget(runcontrol, testcontrol, nearbyvehicles);                                              // [a] Select target and insert player into any seat            
+            if (!testcontrol.iscollisioninstances)
+            {
+                UI.Notify("Target instance is not initialised");
+                return;
+            };
+
+            SelectCollider(runcontrol, testcontrol, nearbyvehicles);                                            // [b] Create collision between target and colliding vehicle
+            if (!testcontrol.iscollisioninstances) {
+                UI.Notify("Collision instance is not initialised");
+                testcontrol.target_vehicle.Delete();
+                return; };
+
+            testcontrol.colliding_vehicle.FreezePosition = false;
+            testcontrol.target_vehicle.FreezePosition = false;
+            nearbyvehicles.Select(x => x.FreezePosition = false);
+
             PostControl(testcontrol);                                                                           // [c] Wait for collision event to end 
         }
+        public static void SelectTarget(RunControl runcontrol, TestControl testcontrol, Vehicle[] nearbyvehicles)
+        {                      
+            for (int i = 0; i < 3; i++)
+            {
+                testcontrol.target_vehicle = VehicleSelection.Random(runcontrol, nearbyvehicles);               // [a] Choose target car
 
-        public static void SelectTarget(RunControl runcontrol, TestControl testcontrol)
-        {            
-            testcontrol.target_vehicle = VehicleSelection.Random(runcontrol, testcontrol);                      // [a] Choose target car            
-            Game.Player.Character.SetIntoVehicle(testcontrol.target_vehicle, VehicleSeat.Driver);               // [c] Position player into vehicle
-            Script.Wait(1000);
+                if ((testcontrol.target_vehicle is null) | !testcontrol.target_vehicle.Exists()) 
+                {
+                    continue;
+                };
+
+                Game.Player.Character.SetIntoVehicle(testcontrol.target_vehicle, VehicleSeat.Driver);           // [b] Position player into vehicle                    
+                Script.Wait(2000);
+
+                if (testcontrol.target_vehicle.IsVisible)
+                {
+                    testcontrol.target_vehicle.Speed = 0;                                                       // [e] Stop target vehicle (to enable collision)
+                    testcontrol.iscollisioninstances = true;                    
+                    return;
+                }
+            }          
         }
 
         public static Dictionary<string, float> COLLISION_PARAMS = new Dictionary<string, float>()
         {
-            {"SR",  0.5f },  // Start radius
+            {"SR",  4f },    // Start radius
             {"IMS", 20f },   // Initial minimum speed
-            {"IES", 100f }   // Initial excess speed
+            {"IES", 60f }    // Initial excess speed
         };
         public static void SetInitialSpeed(RunControl runcontrol, TestControl testcontrol)
         {
@@ -41,7 +76,7 @@ namespace DRS
             testcontrol.colliding_vehicle.Speed = initialspeed;
         }
 
-        public static void Create(RunControl runcontrol, TestControl testcontrol)
+        public static void SelectCollider(RunControl runcontrol, TestControl testcontrol, Vehicle[] nearbyvehicles)
         {
             // Function - Output: Create collision between the target and colliding vehicle
 
@@ -57,19 +92,26 @@ namespace DRS
 
             /// B: Create collision 
 
-            Vehicle[] nearbyvehicles = World.GetNearbyVehicles(testcontrol.target_vehicle.Position, 100f);      // [d] Freeze nearby vehicles 
-            nearbyvehicles.Select(x => x.FreezePosition = true);
-            testcontrol.target_vehicle.Speed = 0;                                                               // [e] Stop target vehicle (to enable collision)
-            
-            testcontrol.colliding_vehicle = VehicleSelection.Create(runcontrol, cv_pos, cv_heading);            // [f] Create colliding vehicle
+            Vehicle[] validnearbyvehicles = nearbyvehicles
+                .Where(x => !x.Equals(testcontrol.target_vehicle)).ToArray();
 
-            while (testcontrol.colliding_vehicle is null)
+            testcontrol.iscollisioninstances = false;
+
+            for (int i = 0; i < 3; i++)
             {
-                testcontrol.colliding_vehicle = VehicleSelection.Create(runcontrol, cv_pos, cv_heading);
-            }
+                testcontrol.colliding_vehicle = VehicleSelection.Random(runcontrol, validnearbyvehicles);
 
-            SetInitialSpeed(runcontrol, testcontrol);                                                           // [g] Set colliding vehicle initial speed
-            nearbyvehicles.Select(x => x.FreezePosition = false);                                               // [h] Unfreeze nearby vehicles
+                if (!(testcontrol.colliding_vehicle is null) & testcontrol.colliding_vehicle.Exists())
+                {
+                    testcontrol.colliding_vehicle.Position = cv_pos;
+                    testcontrol.colliding_vehicle.Heading = cv_heading;
+                    SetInitialSpeed(runcontrol, testcontrol);
+                    testcontrol.iscollisioninstances = true;
+                    return;
+                }
+            }
+                                                                   // [g] Set colliding vehicle initial speed
+                                                                   // [h] Unfreeze nearby vehicles
         }
 
         public static void PostControl(TestControl testcontrol)
@@ -87,7 +129,7 @@ namespace DRS
                 .Where(x => Damage.DamageCheck(x)).ToList();
             
             damaged_vehicles.ForEach(x => x.FreezePosition = true); 
-            damaged_vehicles.ForEach(x => x.IsPersistent = true);
+            damaged_vehicles.ForEach(x => x.SetPersistence(true));
         }
 
         public static bool EndCheck(Vehicle vehicle, int i)
