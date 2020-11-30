@@ -98,11 +98,13 @@ namespace DRS
 
         public static List<Model> ERRONEOUS_VEHICLE_MODELS = new List<Model>
         {
-            new Model(VehicleHash.Camper),
-            new Model(VehicleHash.Taco),
+            new Model(VehicleHash.Buccaneer),
+            new Model(VehicleHash.Camper),            
             new Model(VehicleHash.Panto), 
             new Model(VehicleHash.Pounder),
-            new Model(VehicleHash.RentalBus), 
+            new Model(VehicleHash.RentalBus),
+            new Model(VehicleHash.Taco),
+            new Model(VehicleHash.Vigero),
             new Model(VehicleHash.XA21),
             new Model(VehicleHash.Youga), 
             new Model(VehicleHash.Youga2)
