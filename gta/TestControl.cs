@@ -19,7 +19,7 @@ namespace DRS
 
         public DateTime teststarttime;
         public DateTime testendtime;
-        public int testduration;
+        public double testduration;
 
         /// B: Entities
 
@@ -67,7 +67,7 @@ namespace DRS
             // Output: Send test info to SQL DB
 
             testendtime = DateTime.Now;
-            testduration = (testendtime - teststarttime).Duration().Milliseconds;
+            testduration = (testendtime - teststarttime).Duration().TotalSeconds;
             ToDB();           
         }
 

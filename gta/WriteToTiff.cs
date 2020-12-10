@@ -146,7 +146,7 @@ namespace DRS
                 testcontrol.frozen_entities.AddRange(frozen_vehicles);
                 testcontrol.frozen_entities.ForEach(x => x.FreezePosition = true);
 
-                Script.Wait(2000);
+                Script.Wait(3000);
                 
                 Game.TimeScale = 0;                           // [a] Slow down time TO avoid pixel drift OR return to normal  
                 Game.Pause(true);                             // [b] Allow game to load sufficiently
