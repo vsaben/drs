@@ -115,29 +115,6 @@ def add_anchor_ids(y, anchors, ids_only = False):
     if ids_only: return anchor_idx
     return tf.concat([y, anchor_idx], axis=-1)                           # Append best anchor id to y [index = 20]
 
-#@tf.function 
-#def pad_batch(arr, max_detect):    
-#    nbatch = tf.shape(arr)[0]
-#    
-    # Number of detections
-#     
-#    N = tf.TensorArray(tf.int32, size=0, dynamic_size=True)
-#    for batch in arr:
-#        ndetect = tf.shape(batch)[0]
-#        N = N.write(N.size(), ndetect)
-#    N = N.stack()
-
-    # Padded tensors
-#
-#    pad_arr = tf.TensorArray(tf.float32, size=0, dynamic_size=True)
-#    for i in tf.range(nbatch):
-#        paddings = [[0, max_detect - N[i]], [0, 0]]
-#        pad_batch = tf.pad(arr[i], paddings)
-#        pad_arr = pad_arr.write(pad_arr.size(), pad_batch)
-#    return pad_arr.stack()
-
-
-
 @tf.function
 def transform_targets_for_output(arr_yt, y, grid_sizes, cfg):
     

@@ -2,15 +2,16 @@
     Description: Supporting functions for reformatting data into a pre-yolo format
     Function: Format y and features  
     - PART A: 3D-to-2D projection, 2D bounding boxes
-    - PART B: Screen co-ordinates, quarternions                
-    - PART C: Vehicle class encoding 
+    - PART B: Screen co-ordinates, quaternions            
+    - PART C: Recollect annotations
+    - PART D: Vehicle class encoding 
 """
 
 import tensorflow as tf
 import math
 
 pi = tf.constant(math.pi)
-_false = tf.constant(False, dtype=tf.bool)
+_false = tf.constant(False , dtype=tf.bool)
 _true = tf.constant(True, dtype=tf.bool)
 
 # PART A ==================================================================================
@@ -30,8 +31,8 @@ def compute_bb3d(camera, cpos_elem):
     # Target rotation
     
     cpos_elem_8 = get_rel_yaw(camera, cpos_elem[8], _false)
-    tar_cam_rot = tf.stack([cpos_elem[6], cpos_elem[7], cpos_elem_8])   
-    R_tar = create_tar_rot(tar_cam_rot)
+    tar_abs_rot = tf.stack([cpos_elem[6], cpos_elem[7], cpos_elem_8])   
+    R_tar = create_tar_rot(tar_abs_rot)
 
     # Corner dimensions
 
@@ -47,7 +48,7 @@ def compute_bb3d(camera, cpos_elem):
     corner_cam = tf.transpose(tf.matmul(tf.transpose(camera['R']), oriented_corners)) + center     
     return tf.map_fn(lambda cw: C2S(camera, cw), corner_cam, dtype = tf.int16, parallel_iterations=8)    
 
-@tf.function
+# @tf.function
 def get_rel_yaw(camera, tar_yaw, is_tar_to_cam):
 
     """Converts absolute gta-extracted vehicle yaw relative to the camera yaw, and vice versa    
@@ -64,13 +65,33 @@ def get_rel_yaw(camera, tar_yaw, is_tar_to_cam):
     """
 
     cam_yaw = tf.cast(camera['rot'][2], tf.float32)
-    dir_yaw = tf.greater(camera['R'][2, 1], 0)                          
-    if is_tar_to_cam:            
+    dir_yaw = tf.greater(camera['R'][2, 1], 0)
+    
+    def true_fn():
         adj_yaw = realign_rad(tar_yaw - cam_yaw)
-        if not dir_yaw: adj_yaw = realign_yaw(adj_yaw, _true)
-    else: 
-        if not dir_yaw: tar_yaw = realign_yaw(tar_yaw, _false)
-        adj_yaw = tar_yaw + cam_yaw          
+        adj_yaw = tf.cond(tf.math.logical_not(dir_yaw), 
+                          lambda: realign_yaw(adj_yaw, _true), 
+                          lambda: adj_yaw)
+        return adj_yaw
+
+    def false_fn():
+        t_yaw = tf.cond(tf.math.logical_not(dir_yaw), 
+                        lambda: realign_yaw(tar_yaw, _false), 
+                        lambda: tar_yaw)
+        adj_yaw = t_yaw + cam_yaw
+        return adj_yaw
+
+    adj_yaw = tf.cond(is_tar_to_cam, 
+                      true_fn, 
+                      false_fn)
+
+    #if is_tar_to_cam:            
+    #    adj_yaw = realign_rad(tar_yaw - cam_yaw)
+    #    if not dir_yaw: adj_yaw = realign_yaw(adj_yaw, _true)
+    #else: 
+    #    if not dir_yaw: tar_yaw = realign_yaw(tar_yaw, _false)
+    #    adj_yaw = tar_yaw + cam_yaw          
+    
     return adj_yaw
  
 def realign_yaw(theta, is_tar_to_cam):
@@ -112,8 +133,6 @@ def realign_rad(rad):
                    (break_ub, lambda: rad - 2*pi)], 
                   exclusive = True)
     return rad
-
-
 
 def create_tar_rot(euler):
 
@@ -268,9 +287,9 @@ def get_screen_center(camera, cpos):
     screen = tf.transpose(center) / tf.cast(norm, tf.int16) 
     return screen
 
-def get_quart(cpos):
+def get_quat(cpos):
 
-    """Group: Converts euler vehicle rotations to equivalent quarternion representations
+    """Group: Converts euler vehicle rotations to equivalent quaternion representations
     
     :param cpos: collated position, dimension and rotation information
                  for all detections in an image
@@ -279,66 +298,73 @@ def get_quart(cpos):
     """
     
     euler = cpos[:, 6:]
-    quart = tf.map_fn(euler_to_quart, euler, tf.float32)
-    quart = tf.transpose(quart)    
-    return quart
+    q = tf.map_fn(euler_to_quat, euler, tf.float32)
+    q = tf.transpose(q)    
+    return q
 
-def euler_to_quart(euler):
+def E2Q(euler):
 
-    """Converts euler/tait-bryan angles to an equivalent quarternion representation
-    :note: Z-X'-Y'' intrinsic rotation OR YXZ extrinsic rotation
-    :note: rotation charcterised by unit quarternions
-    
+    """Converts euler/tait-bryan angles to an equivalent quaternion representation
+    :note: YXZ extrinsic rotation
+    :note: rotation characterised by unit quaternions
+    :note: source https://github.com/mrdoob/three.js/blob/master/src/math/Quaternion.js
+
     :param euler: euler/tait-bryan angles corresponding to pitch, roll and yaw
 
     :result: (qx, qy, qz, qw)
     """
     
-    hp = 0.5 * euler[0]
-    hr = 0.5 * euler[1]
-    hy = 0.5 * euler[2] 
+    p, r, y = tf.split(euler, 3, axis = -1)
+
+    hp = 0.5 * p
+    hr = 0.5 * r
+    hy = 0.5 * y 
 
     sinp, cosp = tf.sin(hp), tf.cos(hp)  
     sinr, cosr = tf.sin(hr), tf.cos(hr)
     siny, cosy = tf.sin(hy), tf.cos(hy)
 
-    qx = cosr * sinp * cosy + sinr * cosp * siny
-    qy = sinr * cosp * cosy - cosr * sinp * siny
-    qz = cosr * cosp * siny - sinr * sinp * cosy
-    qw = cosr * cosp * cosy + sinr * sinp * siny
+    qx = cosr * sinp * cosy - sinr * cosp * siny
+    qy = sinr * cosp * cosy + cosr * sinp * siny
+    qz = sinr * sinp * cosy + cosr * cosp * siny
+    qw = cosr * cosp * cosy - sinr * sinp * siny
 
-    return tf.stack([qx, qy, qz, qw])
+    q = tf.concat([qx, qy, qz, qw], axis = 1)
+    return tf.transpose(q)
 
-@tf.function
-def quart_to_euler(q):
+def Q2E(q):
 
-    """Converts a quarternion to an euler/tait-bryan angle representation
-    :note: Z-X'-Y'' intrinsic rotation OR YXZ extrinsic rotation
-    :note: extracts euler from a quarternion-generated rotation matrix
+    """Converts a quaternion to an euler/tait-bryan angle representation
+    :note: YXZ extrinsic rotation
+    :note: extracts euler from a quaternion-generated rotation matrix
+    :note: source https://github.com/mrdoob/three.js/blob/master/src/math/Euler.js
 
-    :param q: (qx, qy, qz, qw) quarternion
+    :param q: (qx, qy, qz, qw) quaternion
 
     :result: euler (pitch, roll, yaw) representation
     """
 
-    qx, qy, qz, qw = q[0], q[1], q[2], q[3]
+    q /= tf.norm(q, axis = -1, keepdims = True)  
+    qx, qy, qz, qw = tf.split(q, 4, axis = -1)
 
-    m13 = 2*(qx*qz + qy*qw)
-    m21 = 2*(qx*qy + qz*qw)
-    m22 = 1 - 2*(qx**2 + qz**2)
-    m23 = 2*(qy*qz - qx*qw)
-    m33 = 1 - 2*(qx**2 + qy**2)
-
-    x = tf.asin(-m23) 
+    m11 = qw**2 + qx**2 - qy**2 - qz**2
+    m12 = 2*(qx*qy - qw*qz)
+    m21 = 2*(qw*qz + qx*qy)
+    m22 = qw**2 - qx**2 + qy**2 - qz**2
+    m31 = 2*(qx*qz - qw*qy)
+    m32 = 2*(qw*qx + qy*qz)
+    m33 = qw**2 - qx**2 - qy**2 + qz**2
     
-    if tf.math.less(tf.abs(m23), 0.9999999):
-        y = tf.atan2(m13, m33)
-        z = tf.atan2(m21, m22)
-    else:
-        y = tf.atan2(-m31, m11)
-        z = tf.constant([0])
+    x = tf.asin(tf.clip_by_value(m32, 
+                                 clip_value_min=-1, 
+                                 clip_value_max=1)) 
+    
+    cond = tf.cast(tf.math.less(tf.abs(m32), 0.9999999), tf.float32)
 
-    return tf.stack([x, y, z])
+    y = cond * tf.atan2(-m31, m33) + (1 - cond) * tf.constant([0], tf.float32)
+    z = cond * tf.atan2(-m12, m22) + (1 - cond) * tf.atan2(m21, m11)
+    
+    return tf.concat([x, y, z], axis = -1)
 
 # PART C ======================================================================== 
 

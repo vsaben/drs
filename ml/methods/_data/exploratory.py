@@ -30,6 +30,8 @@ import random
 import argparse
 import tensorflow as tf
 
+sys.path += ["C:\\Users\\Vaughn\\projects\\work\\drs\\ml"] # Temporary
+
 from config import setattrs
 from methods.data import read_and_parse
 from methods._data.reformat import get_bb2d, VEHICLE_CLASSES, WEATHER_CLASSES
@@ -105,7 +107,7 @@ def process_data(data_path, image_size, nclusters):
 
     # Read in and partially process data  
 
-    ds = read_and_parse(data_path, image_size=image_size, istrain=True)    # [x, cpos, features, camera, environment]
+    ds = read_and_parse(data_path, "train", image_size)                   # [x, cpos, features, camera, environment]
     ds_out = list(ds.map(extract_data))                                    # [box_wh, N, ndam, occ, trufreq, cfreq, dims, wfreq, rain, snow]                                   
     ds_lst = list(zip(*ds_out))
 
@@ -370,8 +372,8 @@ def explore(data_dir, image_size, nclusters = 14, cfg = None):
 
 def main(argv):
     parser = argparse.ArgumentParser()
-    parser.add_argument('-data_path', default = './data/', type = str, help='training data path / output directory')
-    parser.add_argument('-num_clusters', default=14, type = int, help='range of clusters')
+    parser.add_argument('data_path', default = './data/', type = str, help='training data path / output directory')
+    parser.add_argument('-num_clusters', default=20, type = int, help='range of clusters')
     parser.add_argument('-image_size', default=416, help="anchor scaling dimensions")
    
     args = parser.parse_args()
