@@ -262,21 +262,23 @@ def compute_recall(pred_boxes, gt_boxes, iou):
 
 # PART C: Validation images (original, annotated, decision gradients) ====================
 
-def plot_val(self, val_ds, nimage = 3):
+class PlotValImages:
+
+    def plot_val(self, val_ds, nimage = 3):
        
         """Writes a sample of validation images 
         including their
    
-            a. predicted annotations
+            a. predicted and ground-truth annotations
             b. decision gradents
 
         to the tensorboard"""
 
         val_ds = list(val_ds
-                      .unbatch()
-                      .take(nimage)
-                      .batch(nimage)
-                      .take(1))[0][0]
+                        .unbatch()
+                        .take(nimage)
+                        .batch(nimage)
+                        .take(1))[0][0]
 
         writer = os.path.join(self.cfg['LOG_DIR'], "sample")
          

@@ -96,6 +96,8 @@ def single_layer_yolo_loss(pbox, gbox, anchors, level, cfg):
     obj_entropy = KLS.binary_crossentropy(y_true=gt_obj, y_pred=pd_obj)
     objcf_loss = obj_mask * obj_entropy
     nobjcf_loss = (1 - obj_mask) * ignore_mask * obj_entropy       
+    #o_loss = tf.where(tf.math.is_nan(objcf_loss), tf.zeros_like(objcf_loss), objcf_loss)
+    #n_loss = tf.where(tf.math.is_nan(nobjcf_loss), tf.zeros_like(nobjcf_loss), nobjcf_loss)
     obj_loss = objcf_loss + nobjcf_loss        
         
     cls_mask_unweighted = tf.squeeze(gt_cls, -1) # [nbatch, gsize, gsize, plevel_anchors] / make more universal
@@ -145,8 +147,6 @@ class ClsMetricLayer(KL.Layer):
             self.add_cm_metrics(flat_cm, lvl)
             flat_cms.append(flat_cm)
 
-        #all_cls = KL.Lambda(lambda x: compute_all_cls(*x, cfg=self.cfg))([pd_boxes, gt_boxes]) # list([ndetect, [pcls, gcls]])*nlevel
-
         # Combined
 
         stack_cm = tf.stack(flat_cms)             # [nlevel, 4]
@@ -191,23 +191,6 @@ class ClsMetricLayer(KL.Layer):
         config.update({'cfg': self.cfg})
         return config
     
-
-    #@classmethod
-    #def compute_cm(pcls, gcls, cfg, name=None):
-
-        #dam_mask = tf.squeeze(gcls, axis=-1)
-        #cm_weights = (tf.cast(tf.equal(dam_mask, 0), tf.float32)*cfg.DAMAGED_RATIO + 
-        #              tf.cast(tf.equal(dam_mask, 1), tf.float32)*(1-cfg.DAMAGED_RATIO))
-
-     #   cm = tf.math.confusion_matrix(gcls, pcls, 
-     #                                   num_classes = cfg.NUM_CLASSES, 
-        #                              #weights = cm_weights, 
-     #                                   name=name)
-        #norm_cm = tf.math.around(tf.cast(cm, tf.float32) / tf.reduce_sum(cm, axis=1), 
-        #print(norm_cm)
-     #   flat_cm = tf.reshape(cm, [-1]) # ADJUST 
-     #   return flat_cm
-
 class RpnMetricLayer(KL.Layer):   
     
     def __init__(self, cfg, name=None, *args, **kwargs):
@@ -243,7 +226,7 @@ class RpnMetricLayer(KL.Layer):
 
         all_tloss = tf.transpose(all_rpn_losses, [0, 2, 1])             # [nbatch, nlosses, nlevels]        
         weighted_tloss = all_tloss * self.lweights                      # [nbatch, nlosses, nlevels]        
-        sum_tloss = tf.reduce_sum(weighted_tloss, axis = 2)             # [nbatch, nlosses]        
+        sum_tloss = tf.reduce_sum(weighted_tloss, axis = 2)             # [nbatch, nlosses]                                  
         mean_tloss = tf.reduce_mean(sum_tloss, axis = 0)                # [nlosses]
         
         ntypes = len(self.tnames)
@@ -306,11 +289,9 @@ def compute_pose_losses(pd_pose, gt_pose, cfg):
     gt_pose = tf.gather_nd(gt_pose, positive_ix)
 
     pd_center, pd_depth, pd_dims, pd_quart = tf.split(pd_pose, (2, 1, 3, 4), axis = -1)                  # [nbatch, ndetect, 10]  
-    gt_rpn, gt_center, gt_depth, gt_dims, gt_quart = tf.split(gt_pose, (5, 2, 1, 3, 4), axis = -1)       # [nbatch, ndetect, 5 + 10]
-        
-    gt_wh = gt_rpn[..., 2:4] - gt_rpn[..., 0:2]
+    gt_rpn, gt_center, gt_depth, gt_dims, gt_quart = tf.split(gt_pose, (4, 2, 1, 3, 4), axis = -1)       # [nbatch, ndetect, 4 + 10]
 
-    center_loss = pose_center_loss(pd_center, gt_center, gt_wh)
+    center_loss = pose_center_loss(pd_center, gt_center, gt_rpn)
     depth_loss = pose_depth_loss(pd_depth, gt_depth) 
     dim_loss = pose_dim_loss(pd_dims, gt_dims)
     quart_loss = pose_quart_loss(pd_quart, gt_quart)
@@ -318,80 +299,51 @@ def compute_pose_losses(pd_pose, gt_pose, cfg):
     sublosses = [center_loss, depth_loss, dim_loss, quart_loss]     
     return tf.stack(sublosses)
 
-# Center
-
-def pose_center_loss(pd_center, gt_center, gt_wh):
+def pose_center_loss(pd_center, gt_center, gt_rpn):
     
-    """
-    :note: scale center offset for 2d region size
-    :note: imperfect - volume / rotation / visible with surface area 
+    """Recollect relative, predicted center coordinates in normalised 
+    image coordinates. Compute MSE.
+
+    :note: scale center offset for 2d region size (box_loss_scale) 
     :note: consistent with rpn yolo loss
 
     :param pd_center: [nbatch, num_rois, normalised [x, y]]
     :param gt_center: [nbatch, num_rois, normalised [x, y]]
     """
-   
-    box_loss_scale = 2 - gt_wh[..., 0] * gt_wh[..., 1]      
+
+    gt_wh = gt_rpn[..., 2:4] - gt_rpn[..., 0:2]
+    box_loss_scale = 2 - gt_wh[..., 0] * gt_wh[..., 1]  
 
     square_loss = tf.square(pd_center - gt_center)                          # [nbatch, ndetect, 2]
     sum_loss = box_loss_scale * tf.reduce_sum(square_loss, axis = -1)       # [nbatch, ndetect]   
     return tf.reduce_mean(sum_loss)                                         # [1]
 
-# Depth
-
 def pose_depth_loss(pd_depth, gt_depth):
+    """Depth loss. Squared logarithmic difference.
+
+    :note: penalises nearby losses more
+
+    :param pd_depth: predicted depth
+    :param gt_depth: ground-truth depth  
+
     """
-    gt_xy, input_image
-
-    :note: l1, l2 - problem: unit depth provides an equal 
-    loss contribution btween distant and near points 
-    distant should be less than near. propose log of depth errors [l_depth]
-    
-    :note: logs - problem: depth's step edge structure (prominent in nature)
-    logs sensitive to shifts in depth direction but not x, y directions. 
-    insensitive to distortion and blur of edges. propose penalise edge errors
-    more (gradients of depth) [l_grad]. Wide view (encapsulate vehicle)
-
-    :note: Weight l_depth + lambda * l_grad - problem: l_grad cannot penalise small 
-    structural errors (not of concern) 
-
-    ("Depth loss (explain)")
-
-    :note: popular metrics
-
-    :note: Eigen et al. logs with coarse and fine-scale networks. fine-scale refines
-    coarse estimation
-
-    :options: mean abs (l1)    | equivalent loss contribution of near and far points  
-              mean square (l2) |
-              scale-invariant loss (l_eigen) | insensitive to x, y direction
-              scale-invariant with gradients (l_eigengrad) [choose initial]
-              berHu (l_berhu)  |
-              huber (l_huber)  |
-              least-squared adversarial
-              conditional random fields
-
-    :note: sobel derivative for simplicity
-    """
-
-    # adjust to sobel size
-
-    #sobel_x = KI.constant([[1, 0, -1], [2, 0, -2], [1, 0, -1]])    
-    #sobel_y = KI.constant([[1, 2, 1], [0, 0, 0], [-1, -2, -1]]) 
-
-    #dx = KL.Conv2D(1, 3, kernel_initializer=sobel_x, trainable=False)(input_image)
-    #dy = KL.Conv2D(1, 3, kernel_initializer=sobel_y, trainable=False)(input_image)
-
-    #D = tf.math.log(pd_depth) - tf.math.log(gt_depth)      # [nbatch, ndetect, 1]  
-    
-    D = tf.square(pd_depth - gt_depth)    
-    return tf.reduce_mean(D)                               # [1]
-
-# Dimension
+ 
+    D = tf.square(tf.math.log(pd_depth / gt_depth))           # [nbatch, ndetect, 1] 
+    return tf.reduce_mean(D)                                  # [1]
 
 def pose_dim_loss(pd_dims, gt_dims):
-    # ADJUST: Dimension loss scaling (like bbox)
+    
+    """Dimension loss. Calculates MSE of absolute or 
+    relative dimensions (if USE_DIM_ANCHOR = T).
+    
+    :note: scale for 3D box volume
+    :note: MSE of relative difference = MSE of absolute difference
+    :note: gt encompasses median dimension specification
 
+    :param pd_dims:
+    :param gt_dims:
+    """
+    
     square_loss = tf.square(pd_dims - gt_dims)                   # [nbatch, ndetect, 3]
     sum_loss = tf.reduce_sum(square_loss, axis = -1)             # [nbatch, ndetect]
     return tf.reduce_mean(sum_loss)                              # [1]

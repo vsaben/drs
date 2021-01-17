@@ -20,11 +20,15 @@ import tensorflow.keras.regularizers as KR
 import tensorflow.keras.callbacks as KC
 
 from methods._model.yolo import YoloGraph
-from methods._model.head import RoiAlign, PoseGraph, DetectionTargetsLayer, OutLayer
+from methods._model.head import ROIAlign, PoseGraph, DetectionTargetsLayer, OutLayer
 from methods._data.targets import transform_targets
 from methods._data import convert
 from methods.loss import ClsMetricLayer, RpnMetricLayer, PoseMetricLayer, CombineLossesLayer
 from methods.metrics import PlotConfusionMatrix
+from methods.visualise import get_ann_images
+
+# CUSTOM_OBJECTS = {'YoloBox': }
+
 
 # B: Collate model ===========================================================================
 
@@ -32,7 +36,7 @@ class DRSYolo():
 
     """Encapsulates DRSYolo functionality"""
 
-    def __init__(self, mode, cfg, val_ds=None):
+    def __init__(self, mode, cfg, infer_ds=None):
 
         """
         :param mode: "training", "inference" or "detection"
@@ -42,7 +46,7 @@ class DRSYolo():
         assert mode in ['training', 'inference', 'detection']
         self.mode = mode
         self.cfg = cfg
-        self.val_ds = val_ds
+        self.infer_ds = infer_ds
 
     def build_model(self):
 
@@ -62,44 +66,47 @@ class DRSYolo():
 
         input_image = KL.Input([cfg['IMAGE_SIZE'], cfg['IMAGE_SIZE'], cfg['CHANNELS']], name='input_image')                
 
-        if self.mode == 'training':     
+        if self.mode in ['training', 'inference']: 
+            environment = KL.Input([cfg['MAX_GT_INSTANCES'], 3], name = 'environment')
+            input_features = KL.Input([cfg['MAX_GT_INSTANCES'], 3], name = 'input_features')
             input_pose = KL.Input([cfg['MAX_GT_INSTANCES'], 10], name='input_pose')   
             input_rpn = KL.Input([cfg['MAX_GT_INSTANCES'], 5], name='input_rpn')                     
-            inputs = [input_image, input_pose, input_rpn]
+            inputs = [input_features, input_image, input_pose, input_rpn]
 
             gt_boxes = KL.Lambda(lambda x: transform_targets(*x, cfg=cfg), name='gt_boxes')([input_rpn, input_pose])
-            gt_od = input_rpn
-            gt_pose = tf.concat([input_rpn, input_pose], axis = -1, name='gt_pose')  # [nbatch, cfg.MAX_GT_INSTANCES, 5 + 10]
             
         # RPN
         
         rpn_fmaps, pd_boxes, nms = YoloGraph(input_image, mode, cfg)    
         rpn_roi = nms[0]
 
-        if self.mode == "training":
+        if self.mode in ["training", "inference"]:
 
-        #    if cfg.USE_RPN_ROI:            
+        #    if cfg.USE_RPN_ROI:
+        #                   
         #        gt_pose, gt_od = DetectionTargetsLayer(cfg, name = 'extract_pose_od')([rpn_roi, gt_boxes])
         #    else:
 
-            rpn_roi = gt_od[..., :4]                     # [nbatch, cfg.MAX_GT_INSTANCES, (x1, y1, x2, y2)] 
+            rpn_roi = input_rpn[..., :4]                                             # [nbatch, cfg.MAX_GT_INSTANCES, (x1, y1, x2, y2)]
+            gt_pose = tf.concat([rpn_roi, input_pose], axis = -1, name='gt_pose')    # [nbatch, cfg.MAX_GT_INSTANCES, 4 + 10]
 
-        roi_align = RoiAlign(mode, cfg, name='roi_align')([rpn_roi, rpn_fmaps])         
+        roi_align = ROIAlign(mode, cfg, name='roi_align')([rpn_roi, rpn_fmaps])         
         
         # HEAD
 
-        pd_pose = PoseGraph(mode, cfg, name='pose_graph')([roi_align])        # [nbatch, cfg.MAX_GT_INSTANCES, 10] 
-                      
-        if self.mode == 'detection': 
-            outs = OutLayer(name='out')([nms, pd_pose]) 
-            return K.Model(input_image, outs, name='drs_yolo') 
+        pd_pose = PoseGraph(mode, cfg, name='pose_graph')([rpn_roi, roi_align])      # [nbatch, cfg.MAX_GT_INSTANCES, 10] (recollected)
+
+        if self.mode in ['detection', 'inference']: 
+            outs = OutLayer(name='out')([nms, pd_pose])
+            
+            if self.mode == 'detection':
+                return K.Model(input_image, outs, name='drs_yolo') 
         
         # METRICS
 
         cls_metric = ClsMetricLayer(cfg, name='cm_metric')([pd_boxes, gt_boxes])
 
         # LOSSES
-
         # note: only training mode left
         # note: ensure model json serialisable: pruning, quantisation
 
@@ -107,21 +114,26 @@ class DRSYolo():
         pose_loss = PoseMetricLayer(cfg, name='pose_loss')([pd_pose, gt_pose]) 
 
         loss = CombineLossesLayer(cfg, name='loss')([rpn_loss, pose_loss, cls_metric])
-  
-        return K.Model(inputs, loss, name='drs_yolo') 
+        
+        if self.mode == 'training':
+            return K.Model(inputs, loss, name='drs_yolo')
+        
+        return K.Model(inputs, [outs, loss], name='drs_yolo')
 
-    def build(self, transfer=False):
+    def build(self):
+
+        """Build, compile, set layer trainability and load weights (if relevant)"""
+
         self.model = self.build_model()
         self.compile()
 
-        if self.mode == 'training' and not transfer:
+        if self.mode == 'training': 
             self.freeze_darknet_layers()
+            self.load_weights(optimiser=True)
 
-        if self.mode in ['inference', 'detection']:
+        elif self.mode in ['detection', 'inference']:            
             self.model.trainable = False
-                    
-        self.load_weights(optimiser=not transfer)
-        
+            self.load_weights(optimiser=False)
 
     def load_weights(self, optimiser=True):
 
@@ -158,20 +170,26 @@ class DRSYolo():
                 logging.info('pretrained weights loaded: {:s}'.format(self.mode))
         else:
             train = DRSYolo("training", self.cfg)
-            train.build(transfer=True)
+            train.build()
             train.model.load_weights(weight_path, by_name=False)
 
-            weighted_names = [submod.name for submod in train.model.layers if 
-                              len(submod.get_weights()) > 0]
-
-            for name in weighted_names:
-                weights = train.model.get_layer(name).get_weights()            
-                self.model.get_layer(name).set_weights(weights)
-
+            DRSYolo.transfer_weights(train.model, self.model)
             logging.info('model weights loaded: {:s}'.format(self.mode))       
+    
+    @staticmethod
+    def transfer_weights(model_a, model_b):
+
+        """Transfer model A weights to model B"""
+        
+        weight_names = [submod.name for submod in model_a.layers 
+                        if len(submod.get_weights()) > 0]
+
+        for name in weight_names:
+            weights = model_a.get_layer(name).get_weights()            
+            model_b.get_layer(name).set_weights(weights)
 
     @staticmethod
-    def restore(cfg, val_ds):
+    def restore(cfg, infer_ds):
         
         """Restores DRSYolo class during training
 
@@ -181,7 +199,7 @@ class DRSYolo():
         """
 
         full_model_dir = os.path.join(cfg['MODEL_DIR'], 'model')
-        cls = DRSYolo("training", cfg, val_ds)
+        cls = DRSYolo("training", cfg, infer_ds)
         #cls.model = K.models.load(full_model_dir)
         return cls
 
@@ -265,6 +283,9 @@ class DRSYolo():
         val_dir = os.path.join(self.cfg['LOG_DIR'], 'cm_validation')
         val_fwriter = tf.summary.create_file_writer(val_dir)
         
+        infer_dir = os.path.join(self.cfg['LOG_DIR'], 'infer')
+        infer_writer = tf.summary.create_file_writer(infer_dir) 
+
         ckpt_dir = os.path.join(self.cfg['MODEL_DIR'], "checkpoints")    
    
         callbacks = [
@@ -279,7 +300,8 @@ class DRSYolo():
                 EpochCM(train_fwriter, 
                         val_fwriter, 
                         self.cfg['TOTAL_EPOCHS'], 
-                        len(self.cfg['MASKS']))]
+                        len(self.cfg['MASKS'])), 
+                ValImg(self.infer_ds, infer_writer, self.cfg)]
         return callbacks
 
     def summary(self):
@@ -298,7 +320,10 @@ class DRSYolo():
                                 verbose=2)
         return history
 
-    def save(self, full=False, schematic=False):
+    def predict(self, x):
+        return self.model(x, training=False)
+
+    def save(self, name = 'model', full=False, schematic=False):
 
         """Saves full model and optimiser weights (workaround)
 
@@ -309,7 +334,7 @@ class DRSYolo():
         # Full model
 
         if full:
-            full_model_dir = os.path.join(self.cfg['MODEL_DIR'], 'model')        
+            full_model_dir = os.path.join(self.cfg['MODEL_DIR'], name)        
             self.model.save(full_model_dir) 
             logging.info('model saved to {:s}'.format(full_model_dir))
 
@@ -337,8 +362,32 @@ class DRSYolo():
             
             logging.info("model schematic saved to {:s}".format(plot_path))       
 
-    def predict(self, x):
-        return self.model(x, training=False)
+    def optimise(self, train_ds, val_ds):
+
+        """
+        prune: always first
+        quant: always last
+        """
+
+        # Individual methods
+
+        for mode in ['quant', 'wclust', 'prune']:
+            opt_cls = Optimise(mode, self.copy(), train_ds, val_ds)
+            opt_cls.fit_and_save(mode)
+
+        # Combinations [prune > quant]
+
+        prune = opt_cls        
+        prune_quant = Optimise('quant', prune.copy(), train_ds, val_ds)
+        prune_quant.fit_and_save('prune_quant')
+
+        # All [prune > wclust > quant]
+        
+        prune_wclust = Optimise('wclust', prune, train_ds, val_ds)
+        prune_wclust.fit_and_save('prune_wclust')
+
+        prune_wclust_quant = Optimise('quant', prune_wclust, train_ds, val_ds)
+        prune_wclust_quant.fit_and_save('prun_wclust_quant')
 
 class ModelRestartCheckpoint(KC.Callback):    
     
@@ -351,6 +400,8 @@ class ModelRestartCheckpoint(KC.Callback):
     def __init__(self, ckpt_dir, initial_val_loss):
         super(ModelRestartCheckpoint, self).__init__()
         self.ckpt_dir = os.path.join(ckpt_dir, 'weights')
+        if np.isnan(initial_val_loss):
+            initial_val_loss = np.Inf
         self.initial_val_loss = initial_val_loss 
     
     def on_train_begin(self, logs=None):
@@ -358,7 +409,7 @@ class ModelRestartCheckpoint(KC.Callback):
 
     def on_epoch_end(self, epoch, logs=None):
         current = logs.get("val_loss")
-        if np.less(current, self.best):
+        if not np.isnan(self.best) and np.less(current, self.best):
             logging.info('val loss improved from {:.0f} to {:.0f}. weights saved to {:s}'
                             .format(self.best, current, self.ckpt_dir))
             self.best = current
@@ -504,9 +555,207 @@ class EpochCM(KC.Callback):
                 self.process_attrs(writer, isval, lvl)
 
         self.total_epochs += 1
+
+class ValImg(KC.Callback):
+
+    """Plot a sample of validation images' predicted and ground-truth image 
+    annotations, as well as image gradients, to tensorboard. 
+    Showcase model improvement across epoch intervals. 
+    """
+
+    def __init__(self, infer_ds, infer_writer, cfg):
+        super(ValImg, self).__init__()
+
+        # recollect original images and annotations
+       
+        ds = list(infer_ds)[0][0]
+
+        self.cameras = ds['camera']
+        self.images = ds['input_image']
+        self.nimage = len(self.images)
+        self.cfg = cfg
+
+        gt_padded_anns = tf.concat([ds['input_rpn'],   # [bbox, cls][5]
+                                    ds['input_pose']],  # [center, depth, dims, quart][10]
+                                    axis = -1)
+
+        self.gt_ann_images = get_ann_images(gt_padded_anns, 
+                                            self.cameras, 
+                                            self.images, 
+                                            self.cfg,
+                                            size = self.cfg['IMAGE_SIZE'])
+
+        self.infer_writer = infer_writer
+        self.total_epochs = self.cfg['TOTAL_EPOCHS']
+
+        # Create detection model
+        
+        cls = DRSYolo(mode = 'detection', cfg = self.cfg)
+        cls.build()
+        self.detect_model = cls.model
+                
+    def on_epoch_end(self, epoch, logs=None): 
+
+        if self.total_epochs > 1 & self.total_epochs % 5 == 0: 
+
+            DRSYolo.transfer_weights(self.model, self.detect_model)
+
+            pd_padded_anns = self.detect_model(self.images, training=False) 
+            print('PD_PADDED_ANNS', pd_padded_anns) # ADJUST 
+
+            pd_ann_images = get_ann_images(pd_padded_anns, 
+                                           self.cameras, 
+                                           tf.identity(self.gt_ann_images), 
+                                           self.cfg,
+                                           size = self.cfg['IMAGE_SIZE'])
             
+            with self.infer_writer.as_default():
+                 tf.summary.image('Sample: Validation Data', 
+                                   pd_ann_images, 
+                                   max_outputs=self.nimage, 
+                                   step=self.total_epochs)                 
+        self.total_epochs += 1
+
+"""
+    Description: Model optimisation
+    Functions: TFlite, Pruning, Quantisation, Weight Clustering
+"""
+
+import tensorflow_model_optimization as tfmot
+import zipfile
+import tempfile
+
+def export_tflite(model_path):
+
+    """Exports saved model to .tflite
     
+    :note: extensions (tensorflow help)
+    :note: python implementation under active development (android / ios)
+    :note: need 'CombinedNonMaxSuppression' added to selected tf flex delegates list
+
+    :param model_path: SavedModel directory
+
+    :result: saved tflite model
+    """
+
+    converter = tf.lite.TFLiteConverter.from_saved_model(model_path)
+    #converter.optimizations = [tf.lite.Optimize.DEFAULT] post-quantisation
+    converter.target_spec.supported_ops = [tf.lite.OpsSet.TFLITE_BUILTINS,
+                                           tf.lite.OpsSet.SELECT_TF_OPS]
     
+    tflite_model = converter.convert()
+
+    tflite_path = model_path + '.tflite'
+    with open(tflite_path, 'wb') as f:
+        f.write(tflite_model)
+
+    logging.info('tflite model saved to {:s}'.format(tflite_path))
+
+
+# PART B-D: Pruning / Quantisation / Weight CLustering ===========================
+
+class Optimise(DRSYolo):
+
+    # Do: customise layer (remove bias) 
+    #     save: config, weights
+    #     restore
+
+    def __init__(self, mode, pretrain, train_ds, val_ds):
+
+        """
+        :note: restarts pruned model tensorboard
+
+        :param mode: prune, quant or wclust
+        :param train: DRSYolo object
+        """
+
+        self.mode = mode
+        self.model = pretrain.model
+        self.cfg = pretrain.cfg
+
+        self.train_ds = train_ds
+        self.val_ds = val_ds
+
+    # Fit model
+
+    def build_model(self):
+
+        self.model = K.models.clone_model(
+            self.model, 
+            clone_function=self.apply_layers)
+
+        if self.mode == 'quant':
+            self.model = tfmot.quantization.keras.quantize_apply(self.model)
+
+
+    def fit_and_save(self, name):
+        self.build_model()
+        self.model.summary()
+
+        self.compile()
+
+        self.model.fit(self.train_ds, 
+                       self.val_ds, 
+                       epochs=cfg['OPTIMISE_EPOCHS'],
+                       callbacks=self.get_callbacks(),
+                       verbose=2)
+
+        self.save(name)
+    
+    # Callbacks
+
+    def get_callbacks(self):
+
+        if self.mode == 'prune':
+            log_dir = os.path.join(self.cfg['LOG_DIR'], "prune")
+
+            update = tfmot.sparsity.keras.UpdatePruningStep()
+            summaries = tfmot.sparsity.keras.PruningSummaries(log_dir=log_dir)
+                
+            return [update, summaries]
+
+        return None
+    
+    # Apply optimsation
+
+    def apply_layers(self, layer):        
+        if layer.name in cfg['OPTIMISE_LAYERS']:
+            if self.mode == 'prune':
+                return tfmot.sparsity.keras.prune_low_magnitude(layer)
+            if self.mode == 'quant':
+                return tfmot.quantization.keras.qunatize_annotate_layer(layer)
+            if self.mode == 'wclust':
+                return tfmot.clustering.keras.cluster_weights(layer, self.cfg['CLUSTER_PARAMS'])
+        return layer
+
+    # Get model size
+
+    def strip_model(self):
+        if self.mode == 'prune':
+            self.model = tfmot.sparsity.keras.strip_pruning(self.model)
+        if self.mode == 'wclust':
+            self.model = tfmot.clustering.keras.strip_clustering(self.model)    
+
+    def save_model_file(self):
+        _, keras_file = tempfile.mkstemp('.h5')
+        self.strip_model()
+        self.model.save(keras_file, include_optimizer=False)
+        return keras_file
+
+    def get_gzipped_model_size(self):
+
+        """
+        :return: gzipped model size in bytes
+        """
+
+        keras_file = self.save_model_file()
+
+        _, zipped_file = tempfile.mkstemp('.zip')
+        with zipfile.ZipFile(zipped_file, 
+                             'w', 
+                             compression=zipfile.ZIP_DEFLATED) as f:
+            f.write(keras_file)
+            return os.path.getsize(zipped_file)
 
    
                         
