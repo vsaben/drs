@@ -226,14 +226,30 @@ class Config(object):
 
     """E: Optimisation ========================================================="""
 
-    # Quantisation prunes weights by reducing their float precision. Options: 
-    #   ['none', 'aware', 'post', 'both']
+    # Post-training optimisation parameters. Used across 3 techniques 
+    #   (for simplicity): pruning (P), quantisation (Q) and weight clustering (WC). 
+    #   5 permutations are performed:
+    #       [a] P
+    #       [b] Q
+    #       [c] WC
+    #       [d] P --> Q
+    #       [e] P --> WC --> Q 
 
-    QUANTISATION = 'none'
+
+    OPTIMISE_LAYERS = ['']
+    OPTIMISE_EPOCHS = 2
+
+    # Pruning
+
+
+
+    # Quantisation prunes weights by reducing their float precision. 
+    #   Quantisation-aware-training (QAT) is performed on specified layers of 
+    #   a pretrained model (refer 'OPTIMISE_LAYERS'). Their effect on bias terms, 
+    #   if included, should be monitored for performance impediments  
+
 
     """F: Detection ============================================================"""
-    
-    # Maximum number of possible detections in a single image. See MAX_GT_INSTANCES.
 
     DET_MAX_GT_INSTANCES = 50
 
@@ -403,8 +419,6 @@ def setattrs(_self, **kwargs):
     for k, v in kwargs.items():
         setattr(_self, k, v)
 
-class ConfigModel:
-    pass
 
 
 # Add bbox and class refinement to the head graph. 3 configurations are permitted:

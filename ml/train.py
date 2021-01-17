@@ -18,9 +18,11 @@ physical_devices = tf.config.experimental.list_physical_devices('GPU')
 for physical_device in physical_devices:
     tf.config.experimental.set_memory_growth(physical_device, True)
 
+# tf.debugging.enable_check_numerics(stack_height_limit=60, path_length_limit=100) # ADJUST (Remove when finished)
+
 from config import Config, UpdateConfigYolo, setattrs
 from methods._data.exploratory import explore
-from methods.data import load_ds
+from methods.data import load_all_ds
 from methods.model import DRSYolo 
 
 # A: Manage flags =================================================================================================
@@ -71,7 +73,8 @@ def main(_argv):
 
         UpdateConfigYolo(cfg)
 
-        if cfg.EXPLORE_DATA:        
+        isexplore = os.path.isfile(os.path.join(FLAGS.data_path, 'exploratory.txt'))
+        if cfg.EXPLORE_DATA and not isexplore:        
             explore(FLAGS.data_path, cfg.IMAGE_SIZE, nclusters = 14, cfg = cfg)
 
     setattrs(cfg, MODEL_DIR = model_dir, 
@@ -82,42 +85,63 @@ def main(_argv):
     # C: Load data ========================================================================================
            
     with tf.device('/CPU:0'):
-        train_ds = load_ds(FLAGS.data_path, istrain = True, cfg = cfg)
-        val_ds = load_ds(FLAGS.data_path, istrain = False, cfg = cfg)
+        train_ds, val_ds, infer_ds = load_all_ds(FLAGS.data_path, cfg = cfg)
 
     # D: Configure and fit model ===========================================================================
 
     cfg_mod = cfg.to_dict()
 
-    if isnew:
-        model = DRSYolo(mode="training", cfg=cfg_mod, val_ds=val_ds)
-    else:
-        model = DRSYolo.restore(cfg=cfg_mod, val_ds=val_ds)
+    model = DRSYolo(mode="training", cfg=cfg_mod, infer_ds=infer_ds) if isnew else ( 
+            DRSYolo.restore(cfg=cfg_mod, infer_ds=infer_ds))
     
     model.build()
     model.summary()
     
     history = model.fit(train_ds, val_ds)
 
-    model.save(full=False, schematic=isnew)
-    #model.optimise(prune=True, quant=True, wclust=True)
+    model.save(name='model', full=False, schematic=isnew)
+    #model.optimise()
     
+    val_losses = history.history['val_loss'] + [cfg.BEST_VAL_LOSS]
     setattrs(cfg, TOTAL_EPOCHS = cfg.TOTAL_EPOCHS + cfg.EPOCHS, 
-                  BEST_VAL_LOSS = np.min(history.history['val_loss'] + [cfg.BEST_VAL_LOSS]), 
+                  BEST_VAL_LOSS = np.nanmin(val_losses), 
                   TRAIN_SESSIONS = cfg.TRAIN_SESSIONS + 1)
     cfg.save()
 
     """
     import tensorflow as tf
+    import os
+    import numpy as np
     from config import Config, UpdateConfigYolo, setattrs
-    from methods.data import load_ds
+    from methods.data import load_ds, load_inference_ds
     from methods.model import DRSYolo 
 
-    cfg = Config.restore("./models/default")    
-    setattrs(cfg, EPOCHS = 2, 
-                  BATCH_SIZE = 4, 
-                  MODEL_DIR = "./models/default", 
-                  LOG_DIR = "./models/default/logs") 
+    model_dir = "./models/default"
+    isnew = not os.path.isdir(model_dir)
+    
+    if isnew:
+
+        os.mkdir(model_dir)
+
+        with open("./data/drs.names") as f:
+            CLS = [cls.strip() for cls in f.readlines()]
+            NUM_CLS = len(CLS)
+
+        cfg = Config()
+        setattrs(cfg, NAME = "default",  
+                      EPOCHS = 2,
+                      BATCH_SIZE = 4,
+                      BEST_VAL_LOSS = np.inf)
+
+        UpdateConfigYolo(cfg)
+
+    else:
+
+        cfg = Config.restore(model_dir)    
+        setattrs(cfg, EPOCHS = 2, 
+                      BATCH_SIZE = 4, 
+                      MODEL_DIR = "./models/default", 
+                      LOG_DIR = "./models/default/logs") 
     
     cfg.display('training')
 
@@ -125,18 +149,17 @@ def main(_argv):
         train_ds = load_ds("./data/", istrain = True, cfg=cfg)
         val_ds = load_ds("./data/", istrain = False, cfg=cfg)
 
-    x = list(val_ds.take(3))[0]    
-    print(x)
+        regex = os.path.join("./data/", "inference") + "/*.tfrecord"
+        sample_ds = load_inference_ds(regex, cfg = cfg)
+
+    #x = list(val_ds.take(3))[0]    
+    #print(x)
 
     cfg_mod = cfg.to_dict()
-    model = DRSYolo(mode="detection", cfg=cfg_mod)        
+    model = DRSYolo(mode="training", cfg=cfg_mod, sample_ds=sample_ds)        
     model.build()
 
     #model.summary()
-
-    model.model.save("./models/default/model")
-    export_tflite(model.model)
-
 
     history = model.fit(train_ds, val_ds)
     """

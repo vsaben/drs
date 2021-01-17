@@ -77,8 +77,6 @@ def pyramid_roi_align(rois, fmaps, cfg):
         ix = tf.where(eq_ix)                                    # [ndetect_across_nbatch, batch_id + eq_index]
         
         level_boxes = tf.gather_nd(boxes, ix)                   # [ndetect_across_nbatch, 4]
-        print('level_boxes: ', level_boxes) # ADJUST
-
 
         # Box indices for crop_and_resize.
         box_indices = tf.cast(ix[:, 0], tf.int32)               # [ndetect_across_nbatch]
@@ -151,19 +149,65 @@ def PoseGraph(mode, cfg, name=None):
 
     MODE = 'DET_' if mode == 'detection' else ''
 
-    x = input = KL.Input([cfg[MODE + 'MAX_GT_INSTANCES'], cfg['POOL_SIZE'], cfg['POOL_SIZE'], cfg['TOP_DOWN_PYRAMID_SIZE']])
+    rpn_roi, x = input = (KL.Input([cfg[MODE + 'MAX_GT_INSTANCES'], 4]),
+        KL.Input([cfg[MODE + 'MAX_GT_INSTANCES'], cfg['POOL_SIZE'], cfg['POOL_SIZE'], cfg['TOP_DOWN_PYRAMID_SIZE']]))
 
     x = TDConv(x, cfg['FC_LAYERS_SIZE'], 7)
     x = TDConv(x, cfg['FC_LAYERS_SIZE'], 1) 
     shared = tf.squeeze(x, (2, 3))          # [nbatch, cfg.MAX_GT_INSTANCES, FC_LAYERS_SIZE]
 
-    out = KL.TimeDistributed(KL.Dense(10), name='pose_out')(shared)  
+    out = KL.TimeDistributed(KL.Dense(10), name='pose_out')(shared)
+    act = OutActivations(out, rpn_roi)     
 
-    return K.Model([input], out, name=name)
+    return K.Model(input, act, name=name)
+
+def OutActivations(out, rpn_roi):
+
+    """Apply separate activation functions to each pose component 
+        center: (0, 1)   --> sigmoid and recenter
+        depth:  (0, 100) --> custom
+        dims:   R        --> linear (no activation)
+        quat:   (-1, 1)  --> tanh
+    """
+
+    center, depth, dims, quat = tf.split(out, (2, 1, 3, 4), axis=-1)
+    
+    center = KL.Activation(tf.math.sigmoid)(center)
+    center = RecenterPose(rpn_roi, center)
+
+    depth = KL.Lambda(depth_act)(depth)
+    quat = KL.Activation(tf.math.tanh)(quat)
+
+    return tf.concat([center, depth, dims, quat], axis=-1)
+
+
+def depth_act(x):
+    x = tf.math.sigmoid(x)
+    return 100.0 * ((tf.exp(x) - 1.0) /  (tf.exp(1.0) - 1.0))
+
+def RecenterPose(rpn_roi, center):
+
+    """Respecify:
+        a. vehicle center relative to image from rpn_roi
+        b. dims from median to absolute (if specified)
+
+    :param rpn_roi: [nbatch, cfg.MAX_GT_INSTANCES, [x1, y1, x2, y2]]
+    :param act: final pose layer activations
+
+    :return: recentered final layer pose output
+    """
+
+    x1, y1, x2, y2 = tf.split(rpn_roi, 4, axis=-1)    
+    xm, ym = tf.split(center, 2, axis=-1)
+
+    cx = x1 + (x2 - x1)*xm 
+    cy = y1 + (y2 - y1)*ym                 
+        
+    return tf.concat([cx, cy], axis = -1)
 
 # PART D: Build DRS head ========================================================================
 
-def RoiAlign(mode, cfg, name=None):
+def ROIAlign(mode, cfg, name=None):
     
     """Computes regions of interest
 
@@ -262,29 +306,29 @@ class OutLayer(KL.Layer):
 
     def call(self, inputs):
 
-        """
-        :param nms: [boxes, scores, classes, nvalid]
+        """Reformats predicted output into annotation-ready form
 
+        :note: output must be tensors (not ragged)
 
+        :param nms: [boxes, scores, classes, nvalid] (padded)
         :param pd_pose: [nbatch, cfg.MAX_GT_INSTANCES, 10]
 
-
         :result: [nbatch, ndetect, boxes (4) + score (1) + class (1) + [RPN]
-                       center (2) + depth (1) + dims (3) + quart (4) [HEAD]]
+                       center (2) + depth (1) + dims (3) + quat (4) [HEAD]]
         """
 
         nms, pd_pose = inputs 
         
-        rpn_roi, scores, classes, nvalid = nms
+        # RPN
+
+        rpn_roi, scores, classes, nvalids = nms
 
         scores = tf.expand_dims(scores, axis=-1)
         classes = tf.expand_dims(classes, axis=-1)
 
-        padded_out = tf.concat([rpn_roi, scores, classes, pd_pose], axis=-1, name='out_padded') # [nbatch, cfg.MAX_GT_INSTANCES, 16]
-        mask = tf.not_equal(tf.gather(padded_out, 2, axis=-1), 0, name='out_mask')              # [nbatch, cfg.MAX_GT_INSTANCES]      
-        out = tf.ragged.boolean_mask(padded_out, mask, name='out')    
-        print('out: ', out) # ADJUST
-        return nvalid, out
+        # HEAD
+
+        return tf.concat([rpn_roi, scores, classes, pd_pose], axis=-1, name='out_padded') # [nbatch, cfg.MAX_GT_INSTANCES, 16]
 
 #def build_drs_head(rois, feature_maps, cfg):
     """Builds the computation graph of the mask head of Feature Pyramid Network.
