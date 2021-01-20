@@ -60,7 +60,11 @@ class Config(object):
     #   A "sufficiently large" buffer size is selected to maximise data order 
     #   randomness whilst considering memory constraints. 
 
-    BUFFER_SIZE = 1000
+    BUFFER_SIZE = None
+
+    NTRAIN = None
+    NVAL = None
+    NINFER = None
 
     # Number of training iterations through the full dataset. Early stopping 
     #   permitted via the early stopping keras callback. Total epochs stored for 
@@ -73,13 +77,14 @@ class Config(object):
     # Specifies if an exploratory data analysis is conducted. If true, the analyis 
     #   is performed upon a model's initial creation. The following attributes are 
     #   updated in the configuration file:
-    #   > MAX_GT_INSTANCES = 2 * maximum boxes observed in the training data
+    #   > MAX_GT_INSTANCES = maximum boxes observed in the training data
     #   > ANCHORS
     #   > DIM_ANCHOR 
+    #   > DAMAGED_RATIO
     #   More detailed data characteristics are written to 'exploratory.txt' in the 
     #   data directory.  
  
-    EXPLORE_DATA = True
+    EXPLORE_DATA = False
 
     # Applies a horizontal flip augmentation to each image. Doubles the effective 
     #    dataset size. 
@@ -97,7 +102,7 @@ class Config(object):
     # Train or freeze batch normalization layers. Poor training implications 
     #   where batch size is small. 
 
-    TRAIN_BN    = True
+    TRAIN_BN    = False
     
     # Loss components and weights. Component weighting focuses model performance. 
     #   All components are provided as metrics. RPN metrics account for all 
@@ -152,7 +157,7 @@ class Config(object):
     #  accurate classification. Updated in exploratory data analysis. Additional 
     #  investigation is left for future research. [PI] 
 
-    DAMAGED_RATIO = 0.2115
+    DAMAGED_RATIO = 0.3524
     
     FOCAL_LOSS_ALPHA = 1
 
@@ -212,15 +217,13 @@ class Config(object):
     POOL_SIZE = 7
     #MASK_POOL_SIZE = 14
 
-
-
     FC_LAYERS_SIZE = 1024
 
     # Defines dimension measurements relative to the training set's median observed 
     #   vehicle dimensions. Recollected in the final layer. Set once per model. 
 
     USE_DIM_ANCHOR = True
-    DIM_ANCHOR = [0.9889339804649353, 2.4384219646453857, 0.7416530251502991]
+    DIM_ANCHOR = [1.010254979133606, 2.5427820682525635, 0.7922279834747314]
 
     USE_DEFAULT_ANCHORS = False
 
@@ -240,8 +243,6 @@ class Config(object):
     OPTIMISE_EPOCHS = 2
 
     # Pruning
-
-
 
     # Quantisation prunes weights by reducing their float precision. 
     #   Quantisation-aware-training (QAT) is performed on specified layers of 
@@ -353,14 +354,16 @@ class Config(object):
     def to_dict(self):
         return {attr: getattr(self, attr) for attr in dir(self) if attr.isupper()}
 
-def UpdateConfigYolo(cfg):               
+def UpdateConfigYolo(cfg, data_path):               
     
-    """
-    :param backbone: backbone architecture (string)
-    :param isdefault: default or calculated anchors
-    """
+    """Update configuration with yolo (anchors, masks, default weight directory) 
+    and data attributes (ntrain, nval, ninfer)
 
-    yolo = Yolo(cfg)
+    :param cfg: model configuration file
+    :param data_path: data directory
+    """
+    default_ckpt_dir = os.path.join(data_path, "weights")
+    yolo = Yolo(cfg, default_ckpt_dir)
 
     setattrs(cfg, ANCHORS = yolo.ANCHORS, 
                   MASKS = yolo.MASKS, 
@@ -369,10 +372,10 @@ def UpdateConfigYolo(cfg):
 class Yolo:
     MASKS     = [[6, 7, 8], [3, 4, 5], [0, 1, 2]]             # Sequential layers (3) are responsible for predicting masks of decreasing size 
     
-    ANCHORS_9 = [np.array([(1, 8),(2, 8),(2, 2),(6, 26),(7, 10),(11, 16),(18, 20),(24, 44),(68, 134)], np.float32) / 416][0].tolist()
-    ANCHORS_6 = [np.array([(2, 7),(8, 13),(17, 19),(19, 39),(34, 62),(91, 156)], np.float32) / 416][0].tolist()
+    ANCHORS_9 = [np.array([(10, 11),(16, 40),(18, 20),(25, 55),(29, 31),(37, 83),(42, 48),(61, 85),(87, 144)], np.float32) / 416][0].tolist()
+    ANCHORS_6 = [np.array([(11, 11),(19, 25),(21, 52),(33, 38),(43, 70),(76, 122)], np.float32) / 416][0].tolist()
 
-    def __init__(self, cfg, default_ckpt_dir = "./data/weights/"):
+    def __init__(self, cfg, default_ckpt_dir):
         model = self.get_base_model(cfg.BACKBONE)
 
         istiny = (cfg.BACKBONE[-1] == "T") 

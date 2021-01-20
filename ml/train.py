@@ -11,6 +11,7 @@ from absl import app, flags, logging
 from absl.flags import FLAGS
 
 import os
+import shutil
 import numpy as np
 
 import tensorflow as tf
@@ -31,7 +32,7 @@ flags.DEFINE_string('name',         "default",           'configuration name')
 
 flags.DEFINE_string('data_path',    "./data/",           'path to training and validation data folders')
 flags.DEFINE_string('model_dir',    "./models/",         'storage directory for all models')
-flags.DEFINE_string('class_path',   "./data/drs.names",  'path to classes file')
+flags.DEFINE_string('class_file',   "drs.names",         'path to classes file')
 
 flags.DEFINE_string('backbone',     Config.BACKBONE,     'YoloV3, YoloV3T, YoloV4 or YoloV4T')
 
@@ -45,8 +46,9 @@ def main(_argv):
 
     model_dir = os.path.join(FLAGS.model_dir, FLAGS.name)       
     log_dir = os.path.join(model_dir, "logs")
+    json_file = os.path.join(model_dir, 'config.json')
 
-    isnew = not os.path.isdir(model_dir)
+    isnew = not os.path.isfile(json_file)
 
     if not isnew:
         cfg = Config.restore(model_dir)       
@@ -56,9 +58,12 @@ def main(_argv):
 
         if FLAGS.image_size % 32 != 0: raise Exception("Image size must be perfectly divisible by 32 (Yolo)")
         
+        if os.path.isdir(model_dir):
+            shutil.rmtree(model_dir)     
         os.mkdir(model_dir)
 
-        with open(FLAGS.class_path) as f:
+        class_path = os.path.join(FLAGS.data_path, FLAGS.class_file)
+        with open(class_path) as f:
             CLS = [cls.strip() for cls in f.readlines()]
             NUM_CLS = len(CLS)
 
@@ -69,23 +74,23 @@ def main(_argv):
                       BATCH_SIZE = FLAGS.batch_size,
                       CLASSES = CLS,
                       NUM_CLASSES = NUM_CLS,
-                      BEST_VAL_LOSS = np.inf)
+                      BEST_VAL_LOSS = np.inf)       
 
-        UpdateConfigYolo(cfg)
+        UpdateConfigYolo(cfg, FLAGS.data_path)
 
         isexplore = os.path.isfile(os.path.join(FLAGS.data_path, 'exploratory.txt'))
         if cfg.EXPLORE_DATA and not isexplore:        
             explore(FLAGS.data_path, cfg.IMAGE_SIZE, nclusters = 14, cfg = cfg)
-
+    
     setattrs(cfg, MODEL_DIR = model_dir, 
                   LOG_DIR = log_dir)
 
-    cfg.display('training')
-  
     # C: Load data ========================================================================================
            
     with tf.device('/CPU:0'):
         train_ds, val_ds, infer_ds = load_all_ds(FLAGS.data_path, cfg = cfg)
+
+    cfg.display('training')
 
     # D: Configure and fit model ===========================================================================
 
@@ -99,7 +104,7 @@ def main(_argv):
     
     history = model.fit(train_ds, val_ds)
 
-    model.save(name='model', full=False, schematic=isnew)
+    model.save(name='model', full=False, schematic=False)
     #model.optimise()
     
     val_losses = history.history['val_loss'] + [cfg.BEST_VAL_LOSS]
@@ -107,68 +112,6 @@ def main(_argv):
                   BEST_VAL_LOSS = np.nanmin(val_losses), 
                   TRAIN_SESSIONS = cfg.TRAIN_SESSIONS + 1)
     cfg.save()
-
-    """
-    import tensorflow as tf
-    import os
-    import numpy as np
-    from config import Config, UpdateConfigYolo, setattrs
-    from methods.data import load_ds, load_inference_ds
-    from methods.model import DRSYolo 
-
-    model_dir = "./models/default"
-    isnew = not os.path.isdir(model_dir)
-    
-    if isnew:
-
-        os.mkdir(model_dir)
-
-        with open("./data/drs.names") as f:
-            CLS = [cls.strip() for cls in f.readlines()]
-            NUM_CLS = len(CLS)
-
-        cfg = Config()
-        setattrs(cfg, NAME = "default",  
-                      EPOCHS = 2,
-                      BATCH_SIZE = 4,
-                      BEST_VAL_LOSS = np.inf)
-
-        UpdateConfigYolo(cfg)
-
-    else:
-
-        cfg = Config.restore(model_dir)    
-        setattrs(cfg, EPOCHS = 2, 
-                      BATCH_SIZE = 4, 
-                      MODEL_DIR = "./models/default", 
-                      LOG_DIR = "./models/default/logs") 
-    
-    cfg.display('training')
-
-    with tf.device('/CPU:0'):
-        train_ds = load_ds("./data/", istrain = True, cfg=cfg)
-        val_ds = load_ds("./data/", istrain = False, cfg=cfg)
-
-        regex = os.path.join("./data/", "inference") + "/*.tfrecord"
-        sample_ds = load_inference_ds(regex, cfg = cfg)
-
-    #x = list(val_ds.take(3))[0]    
-    #print(x)
-
-    cfg_mod = cfg.to_dict()
-    model = DRSYolo(mode="training", cfg=cfg_mod, sample_ds=sample_ds)        
-    model.build()
-
-    #model.summary()
-
-    history = model.fit(train_ds, val_ds)
-    """
-
-    """OUT: MODEL.FIT
-
-    tf.config.experimental_run_functions_eagerly(True)    
-    history = model.fit(train_ds, val_ds)
-    """  
 
 if __name__ == '__main__':
     try:
