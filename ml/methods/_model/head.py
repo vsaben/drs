@@ -63,7 +63,7 @@ def pyramid_roi_align(rois, fmaps, cfg):
     boxes = tf.concat([y1, x1, y2, x2], axis=-1) # [nbatch, maxboxes, 4] 
 
     roi_level = assign_roi_level(anchor_id, nlevels) # [nbatch, maxboxes, 1]
-
+    
     # Loop through levels and apply ROI pooling to each. P0 to P2.
         
     pool_shape = [cfg['POOL_SIZE'], cfg['POOL_SIZE']]
@@ -84,9 +84,9 @@ def pyramid_roi_align(rois, fmaps, cfg):
         # Keep track of which box is mapped to which level
         box_to_level.append(ix)
 
-        # Stop gradient propogation to ROI proposals [ ADJUST ]
-        #level_boxes = tf.stop_gradient(level_boxes) 
-        #box_indices = tf.stop_gradient(box_indices) 
+        # Stop gradient propogation to ROI proposals
+        level_boxes = tf.stop_gradient(level_boxes) 
+        box_indices = tf.stop_gradient(box_indices) 
 
         # Crop and Resize
         # From Mask R-CNN paper: "We sample four regular locations, so
@@ -103,6 +103,7 @@ def pyramid_roi_align(rois, fmaps, cfg):
                                                box_indices, 
                                                pool_shape,
                                                method="bilinear")
+        #roi_aligned = tf.debugging.check_numerics(roi_aligned, 'ROI ALIGNED')
         pooled.append(roi_aligned)
 
     # Pack pooled features into one tensor

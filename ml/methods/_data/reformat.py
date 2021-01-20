@@ -46,9 +46,8 @@ def compute_bb3d(camera, cpos_elem):
     center = tf.cast(cpos_elem[:3], tf.float64)                           
 
     corner_cam = tf.transpose(tf.matmul(tf.transpose(camera['R']), oriented_corners)) + center     
-    return tf.map_fn(lambda cw: C2S(camera, cw), corner_cam, dtype = tf.int16, parallel_iterations=8)    
+    return tf.map_fn(lambda cw: C2S(camera, cw), corner_cam, dtype = tf.int32, parallel_iterations=8)    
 
-# @tf.function
 def get_rel_yaw(camera, tar_yaw, is_tar_to_cam):
 
     """Converts absolute gta-extracted vehicle yaw relative to the camera yaw, and vice versa    
@@ -85,13 +84,6 @@ def get_rel_yaw(camera, tar_yaw, is_tar_to_cam):
                       true_fn, 
                       false_fn)
 
-    #if is_tar_to_cam:            
-    #    adj_yaw = realign_rad(tar_yaw - cam_yaw)
-    #    if not dir_yaw: adj_yaw = realign_yaw(adj_yaw, _true)
-    #else: 
-    #    if not dir_yaw: tar_yaw = realign_yaw(tar_yaw, _false)
-    #    adj_yaw = tar_yaw + cam_yaw          
-    
     return adj_yaw
  
 def realign_yaw(theta, is_tar_to_cam):
@@ -212,10 +204,9 @@ def C2S(camera, cw):
 
     sw = tf.stack([(W - 1) * 0.5 *(1 + ndcx), (H - 1) * 0.5 * (1 - ndcy)])
     sw = tf.round(sw)
-    sw = tf.cast(sw, tf.int16)
+    sw = tf.cast(sw, tf.int32)
     return sw
 
-@tf.function
 def compute_bb2d(camera, cpos_elem):
 
     """Computes normalised, clipped 2D bounding box from a vehicle's projected 3D 
@@ -233,25 +224,15 @@ def compute_bb2d(camera, cpos_elem):
     x_vals = bb3d[:, 0]
     y_vals = bb3d[:, 1]
 
-    xmin = tf.reduce_min(x_vals)
-    xmax = tf.reduce_max(x_vals)
-    ymin = tf.reduce_min(y_vals)
-    ymax = tf.reduce_max(y_vals)
+    W = tf.cast(camera['w'], tf.int32) 
+    H = tf.cast(camera['h'], tf.int32) 
 
-    W = tf.cast(camera['w'], dtype = tf.int16) 
-    H = tf.cast(camera['h'], dtype = tf.int16) 
+    xmin = tf.clip_by_value(tf.reduce_min(x_vals), 0, W - 1) / (W - 1) # float32
+    xmax = tf.clip_by_value(tf.reduce_max(x_vals), 0, W - 1) / (W - 1)
+    ymin = tf.clip_by_value(tf.reduce_min(y_vals), 0, H - 1) / (H - 1)
+    ymax = tf.clip_by_value(tf.reduce_max(y_vals), 0, H - 1) / (H - 1)
 
-    if xmin < 0: xmin = tf.cast(0, tf.int16)
-    if xmax > (W - 1): xmax = tf.cast(W - 1, tf.int16)
-    if ymin < 0: ymin = tf.cast(0, tf.int16)
-    if ymax > (H - 1): ymax = tf.cast(H - 1, tf.int16)
-
-    xmin = tf.cast(xmin / (W - 1), tf.float32)
-    xmax = tf.cast(xmax / (W - 1), tf.float32)
-    ymin = tf.cast(ymin / (H - 1), tf.float32)
-    ymax = tf.cast(ymax / (H - 1), tf.float32)
-
-    return tf.stack([xmin, ymin, xmax, ymax])
+    return tf.cast(tf.stack([xmin, ymin, xmax, ymax]), tf.float32)
 
 def get_bb2d(camera, cpos):
 
@@ -282,9 +263,9 @@ def get_screen_center(camera, cpos):
     :return: (ndetections, [x, y]) normalised 2D co-ordinates
     """
 
-    center = tf.map_fn(lambda x: C2S(camera, x[:3]), cpos, dtype = tf.int16)
+    center = tf.map_fn(lambda x: C2S(camera, x[:3]), cpos, dtype = tf.int32)
     norm = tf.expand_dims(tf.stack([camera['w'] - 1, camera['h'] - 1]), axis=-1)  
-    screen = tf.transpose(center) / tf.cast(norm, tf.int16) 
+    screen = tf.transpose(center) / tf.cast(norm, tf.int32) 
     return screen
 
 def get_quat(cpos):

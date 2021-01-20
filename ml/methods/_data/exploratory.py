@@ -339,13 +339,12 @@ def write_explore(output_dir, res_dict, image_size, cfg = None):
         anchors = std_anchor_dict[6] if istiny else std_anchor_dict[9]
 
         setattrs(cfg, DAMAGED_RATIO = damaged_ratio,
-                      MAX_GT_INSTANCES = 2 * max_boxes, 
+                      MAX_GT_INSTANCES = max_boxes, 
                       ANCHORS = anchors.tolist(), 
                       DIM_ANCHOR = r['median_dims'].tolist())
 
         print("Updated cfg | exploratory analysis")
     
-
 def write_anchors_to_file(f, ncluster, centroids, avg_iou, image_size):
 
     # Note: Anchors are given image relative to size
