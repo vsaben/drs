@@ -310,18 +310,19 @@ def load_ds(data_path, set, cfg):
 
     :result: batched dataset iterator [nbatch, x, [anchor y, camera, environment]] 
     """
-                       
+    
     ds = read_and_parse(data_path, set, cfg.IMAGE_SIZE)                               # Out: [x, cpos, features, camera, environment]
-    istrain = (set == 'train')
-
-    if istrain and cfg.ISAUGMENT: 
+    
+    if set in ['train'] and cfg.ISAUGMENT: 
         augment_ds = ds.map(horizontal_flip)
         ds = ds.concatenate(augment_ds)
 
-    ds = ds.map(lambda *x: transform_prebatch(*x, cfg))                               # Out: [x, padded input_gt, camera, environment] ADJUST
-    
-    if istrain: 
-        ds = ds.shuffle(buffer_size=cfg.BUFFER_SIZE, reshuffle_each_iteration=True) 
+    ds = ds.map(lambda *x: transform_prebatch(*x, cfg))                               # Out: [x, padded input_gt, camera, environment] ADJUST 
+
+    if set in ['train']:               
+        buffer = get_train_buffer(data_path, cfg)
+        setattr(cfg, 'BUFFER_SIZE', buffer)
+        ds = ds.shuffle(buffer_size=cfg.BUFFER_SIZE, reshuffle_each_iteration=True)       
 
     ds = ds.batch(cfg.BATCH_SIZE)
     ds = ds.prefetch(buffer_size=tf.data.experimental.AUTOTUNE)  
@@ -349,12 +350,30 @@ def read_tfrecord(regex):
     return ds
 
 def read_and_parse(data_path, set, image_size):
-    
-    regex = os.path.join(data_path, set) + "\\*.tfrecord"
-
+    regex = os.path.join(data_path, set + '/', "*.tfrecord")
     ds = read_tfrecord(regex)                                                         
     ds = ds.map(lambda e: parse_model_tfrecord(e, image_size))
     return ds
+
+def get_train_buffer(data_path, cfg):
+    
+    """Calculate training data buffer size. Set to
+    min(number of training examples, cfg buffer size) with 
+    augmentation (if specified).
+    
+    :param data_path: data directory
+    :param cfg: model configuration settings
+
+    :result: training buffer size
+    """
+
+    train_dir = os.path.join(data_path, 'train')
+    ntrain = len(os.listdir(train_dir))
+       
+    max_buffer = ntrain * (1 + int(cfg.ISAUGMENT))
+    buffer = max_buffer if cfg.BUFFER_SIZE is None else (
+                           min(max_buffer, cfg.BUFFER_SIZE))    
+    return buffer
 
 def load_all_ds(data_path, cfg):
     

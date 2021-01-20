@@ -5,6 +5,7 @@
 import tensorflow as tf
 import numpy as np
 import cv2
+import random
 
 from methods._data.reformat import compute_bb3d, Q2E
 from absl import logging
@@ -58,7 +59,7 @@ def get_ann_images(padded_anns, cameras, images, cfg, size = None):
         # Annotations
         
         nann = tf.shape(ann)[0].numpy()
-        ndamaged =  np.sum(ann[:, -10], dtype = np.int32) if nann > 0 else 0
+        ndamaged =  np.sum(ann[:, -11], dtype=np.int32) if nann > 0 else 0
         arr = show_control(arr, nann, ndamaged, camera, mode, col_udam)       
 
         logging.info('image: {:d} | detections (damaged): {:d} ({:d})'.format(c, nann, ndamaged))  
@@ -73,7 +74,7 @@ def get_ann_images(padded_anns, cameras, images, cfg, size = None):
             dam = ann[..., -11]
             
             cpos = pose_to_cpos(pose, camera, cfg)       
-            bb3d = tf.map_fn(lambda e: compute_bb3d(camera, e), cpos, tf.int16)
+            bb3d = tf.map_fn(lambda e: compute_bb3d(camera, e), cpos, tf.int32)
 
             center = pose[...,:2]        
             sw = center * np.array([camera['w'] - 1, camera['h'] - 1]) 

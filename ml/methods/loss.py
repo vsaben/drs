@@ -276,28 +276,25 @@ class RpnMetricLayer(KL.Layer):
 def compute_pose_losses(pd_pose, gt_pose, cfg):
     """
      :note: only positive ROIs contribute to loss (similar to bbox in mask-rcnn)
-     :note: remove padding check depth = 0 (only one possible, index = 7)
+     :note: remove padding check depth = 0 (only one possible)
      :note: add configuration (cfg) to allow for different loss functions
     """
 
-    #gt_cond = tf.gather(gt_pose, 7, axis = -1)    # [nbatch, 40]
-    gt_cond = gt_pose[..., 7]                      # [nbatch, 40]
-
-    positive_ix = tf.where(gt_cond > 0)           # [none, 2] --> (instance index, cond true index)
-
-    pd_pose = tf.gather_nd(pd_pose, positive_ix)  # [none, 10] --> (true instance combined, pose)
+    gt_cond = gt_pose[..., 6]  
+    positive_ix = tf.where(gt_cond > 0)            # [none, 2] --> (instance index, cond true index)
+    
+    pd_pose = tf.gather_nd(pd_pose, positive_ix)   # [none, 10] --> (true instance combined, pose) 
     gt_pose = tf.gather_nd(gt_pose, positive_ix)
 
     pd_center, pd_depth, pd_dims, pd_quart = tf.split(pd_pose, (2, 1, 3, 4), axis = -1)                  # [nbatch, ndetect, 10]  
     gt_rpn, gt_center, gt_depth, gt_dims, gt_quart = tf.split(gt_pose, (4, 2, 1, 3, 4), axis = -1)       # [nbatch, ndetect, 4 + 10]
 
     center_loss = pose_center_loss(pd_center, gt_center, gt_rpn)
-    depth_loss = pose_depth_loss(pd_depth, gt_depth) 
+    depth_loss = pose_depth_loss(pd_depth, gt_depth)
     dim_loss = pose_dim_loss(pd_dims, gt_dims)
     quart_loss = pose_quart_loss(pd_quart, gt_quart)
 
-    sublosses = [center_loss, depth_loss, dim_loss, quart_loss]     
-    return tf.stack(sublosses)
+    return tf.stack([center_loss, depth_loss, dim_loss, quart_loss])
 
 def pose_center_loss(pd_center, gt_center, gt_rpn):
     
@@ -327,9 +324,9 @@ def pose_depth_loss(pd_depth, gt_depth):
     :param gt_depth: ground-truth depth  
 
     """
- 
-    D = tf.square(tf.math.log(pd_depth / gt_depth))           # [nbatch, ndetect, 1] 
-    return tf.reduce_mean(D)                                  # [1]
+
+    D = tf.square(tf.math.log(pd_depth / gt_depth))     # [nbatch, ndetect, 1] 
+    return tf.reduce_mean(D)                            # [1]
 
 def pose_dim_loss(pd_dims, gt_dims):
     
@@ -357,7 +354,6 @@ def pose_quart_loss(pd_quart, gt_quart):
 
     sum_loss = tf.norm(gt_quart - pd_quart / tf.norm(pd_quart, axis = -1, keepdims=True), ord = 1, axis = -1) # [nbatch, ndetect]
     return tf.reduce_mean(sum_loss)                                                                           # [1]
-
 
 class PoseMetricLayer(KL.Layer):
     

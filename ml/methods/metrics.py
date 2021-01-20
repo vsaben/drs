@@ -111,7 +111,7 @@ class PlotConfusionMatrix:
 
         return img
 
-# PART B: mAP ======================================================================= 
+# PART B: 2D Metrics ====================================================================== 
 
 """Compute mAP across factors of interest:
 
@@ -121,22 +121,35 @@ class PlotConfusionMatrix:
 
 """
 
-def compute_matches(gt_boxes, gt_class_ids, gt_masks,
-                    pred_boxes, pred_class_ids, pred_scores, pred_masks,
-                    iou_threshold=0.5, score_threshold=0.0):
+def unpad(tensor, ind):
+
+    """Remove zero padding from a tensor"""
+
+    cond = tensor[..., ind]  
+    pos_ix = tf.where(cond > 0)            
+    return tf.gather_nd(tensor, pos_ix)
+
+def compute_matches(gt_rpn, pd_rpn, iou_thresh=0.5, score_thresh=0.0):
+    
     """Finds matches between prediction and ground truth instances.
 
-    Returns:
-        gt_match: 1-D array. For each GT box it has the index of the matched
-                  predicted box.
-        pred_match: 1-D array. For each predicted box, it has the index of
-                    the matched ground truth box.
-        overlaps: [pred_boxes, gt_boxes] IoU overlaps.
+    :param gt_rpn: [cfg.MAX_GT_INSTANCES, 5] 
+    :param pd_rpn: [cfg.MAX_GT_INSTANCES, 6] (includes score)
+    :param iou_thresh: iou threshold
+    :param score_thresh: score threshold
+
+    :result gt_match: [ndetect]. index of the matched pd box for each gt box
+            pd_match: [ndetect]. index of the matched gt box for each pd box                    
+            overlaps: [pred_boxes, gt_boxes] IoU overlaps.
     """
-    # Trim zero padding
-    # TODO: cleaner to do zero unpadding upstream
+    
+    # Unpad
+    
+    
+
+
     gt_boxes = trim_zeros(gt_boxes)
-    gt_masks = gt_masks[..., :gt_boxes.shape[0]]
+    
     pred_boxes = trim_zeros(pred_boxes)
     pred_scores = pred_scores[:pred_boxes.shape[0]]
     # Sort predictions by score from high to low
@@ -144,9 +157,9 @@ def compute_matches(gt_boxes, gt_class_ids, gt_masks,
     pred_boxes = pred_boxes[indices]
     pred_class_ids = pred_class_ids[indices]
     pred_scores = pred_scores[indices]
-    pred_masks = pred_masks[..., indices]
 
     # Compute IoU overlaps [pred_masks, gt_masks]
+    
     overlaps = compute_overlaps_masks(pred_masks, gt_masks)
 
     # Loop through predictions and find matching ground truth boxes
@@ -177,7 +190,7 @@ def compute_matches(gt_boxes, gt_class_ids, gt_masks,
                 pred_match[i] = j
                 break
 
-    return gt_match, pred_match, overlaps
+    return gt_match, pd_match, overlaps
 
 
 def compute_ap(gt_boxes, gt_class_ids, gt_masks,
@@ -186,7 +199,7 @@ def compute_ap(gt_boxes, gt_class_ids, gt_masks,
     """Compute Average Precision at a set IoU threshold (default 0.5).
 
     Returns:
-    mAP: Mean Average Precision
+    AP: Average Precision
     precisions: List of precisions at different class score thresholds.
     recalls: List of recall values at different class score thresholds.
     overlaps: [pred_boxes, gt_boxes] IoU overlaps.
@@ -260,39 +273,5 @@ def compute_recall(pred_boxes, gt_boxes, iou):
     recall = len(set(matched_gt_boxes)) / gt_boxes.shape[0]
     return recall, positive_ids
 
-# PART C: Validation images (original, annotated, decision gradients) ====================
+# PART C: Validation images (Decision gradients) ==========================
 
-class PlotValImages:
-
-    def plot_val(self, val_ds, nimage = 3):
-       
-        """Writes a sample of validation images 
-        including their
-   
-            a. predicted and ground-truth annotations
-            b. decision gradents
-
-        to the tensorboard"""
-
-        val_ds = list(val_ds
-                        .unbatch()
-                        .take(nimage)
-                        .batch(nimage)
-                        .take(1))[0][0]
-
-        writer = os.path.join(self.cfg['LOG_DIR'], "sample")
-         
-        with writer.as_default():
-
-            original = val_ds['input_image']
-
-            outs = self.model.predict(original)
-            
-            #p_annotated = 
-            #o_annotated =
-           
-            #tf.summary.image('Sample Batch: Validation Data', images, max_outputs=nimage, step=0)
-
-                # Decision Gradients
-
-            tf.summary.image('Sample: Validation Data', images, max_outputs=nimage, step=0)

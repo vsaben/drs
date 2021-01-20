@@ -91,7 +91,7 @@ class DRSYolo():
             gt_pose = tf.concat([rpn_roi, input_pose], axis = -1, name='gt_pose')    # [nbatch, cfg.MAX_GT_INSTANCES, 4 + 10]
 
         roi_align = ROIAlign(mode, cfg, name='roi_align')([rpn_roi, rpn_fmaps])         
-        
+
         # HEAD
 
         pd_pose = PoseGraph(mode, cfg, name='pose_graph')([rpn_roi, roi_align])      # [nbatch, cfg.MAX_GT_INSTANCES, 10] (recollected)
@@ -311,13 +311,13 @@ class DRSYolo():
 
         initial_epoch = self.cfg['TOTAL_EPOCHS']
         epochs = self.cfg['TOTAL_EPOCHS'] + self.cfg['EPOCHS']
-
-        history = self.model.fit(train_ds, 
-                                initial_epoch=initial_epoch, 
-                                epochs=epochs,
-                                callbacks=self.get_callbacks(),
-                                validation_data=val_ds, 
-                                verbose=2)
+        
+        history = self.model.fit(train_ds,             
+                                 initial_epoch=initial_epoch, 
+                                 epochs=epochs,
+                                 callbacks=self.get_callbacks(),    
+                                 validation_data=val_ds,
+                                 verbose=1)
         return history
 
     def predict(self, x):
