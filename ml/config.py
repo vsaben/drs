@@ -62,16 +62,11 @@ class Config(object):
 
     BUFFER_SIZE = None
 
-    NTRAIN = None
-    NVAL = None
-    NINFER = None
-
     # Number of training iterations through the full dataset. Early stopping 
     #   permitted via the early stopping keras callback. Total epochs stored for 
     #   to combine tensorboard summaries via a step parameter.   
 
     EPOCHS = 2
-
     TOTAL_EPOCHS = 0
 
     # Specifies if an exploratory data analysis is conducted. If true, the analyis 
