@@ -7,11 +7,9 @@
 from absl import logging
 
 import numpy as np
-
-import tensorflow as tf
 import os
 
-def load_raw_weights(model):
+def load_yolo_weights(model):
 
     """Converts raw yolo weights to a tf checkpoint which is consistent with 
     the selected backbone. Saves tf checkpoint to model directory.
@@ -24,55 +22,53 @@ def load_raw_weights(model):
     # Extract yolo layers
 
     mod = model.model
-    submods = mod.get_layer('yolo').layers[1:] # exclude input
+    mod.summary() # REMOVE
 
-    # Open weight file
-  
+    layer_size = model.cfg['LAYER_SIZE']
+    output_pos = model.cfg['OUTPUT_POS']
     weights_file = model.cfg['DEFAULT_YOLO_WEIGHT_PATH']
 
+    # Open weight file
+    
     with open(weights_file, 'rb') as wf:
         
         major, minor, revision, seen, _ = np.fromfile(wf, dtype=np.int32, count=5)
         
-        for submod in submods:
-            layers = submod.layers
-            nlayers = len(layers)
+        j = 0
+        for i in range(layer_size):
+            
+            conv_layer_name = 'conv2d_%d' %i if i > 0 else 'conv2d'
+            bn_layer_name = 'batch_normalization_%d' %j if j > 0 else 'batch_normalization'   
 
-            for i, layer in enumerate(layers):
+            conv_layer = mod.get_layer(conv_layer_name)
+            filters = conv_layer.filters
+            k_size = conv_layer.kernel_size[0]
+            in_dim = conv_layer.input_shape[-1]
+            
+            if i not in output_pos:
+                # darknet [beta, gamma, mean, variance]
+                bn_weights = np.fromfile(wf, dtype=np.float32, count=4 * filters)
+                # tf [gamma, beta, mean, variance]
+                bn_weights = bn_weights.reshape((4, filters))[[1, 0, 2, 3]]
+                bn_layer = mod.get_layer(bn_layer_name)
+                j += 1
+            else:
+                conv_bias = np.fromfile(wf, dtype=np.float32, count=filters)
 
-                if not layer.name.startswith('conv2d'): 
-                    continue
+            logging.info("{}/{}".format(conv_layer_name, bn_layer_name if i not in output_pos else 'output'))
 
-                bnorm = None
-                if i + 1 < nlayers and layers[i + 1].name.startswith('batch_norm'):
-                    bnorm = layers[i + 1]
+            # darknet shape (out_dim, in_dim, height, width)
+            conv_shape = (filters, in_dim, k_size, k_size)
+            conv_weights = np.fromfile(wf, dtype=np.float32, count=np.product(conv_shape))
 
-                logging.info("{}/{} {}".format(submod.name, layer.name, 'bn' if bnorm else 'bias'))
+            # tf shape (height, width, in_dim, out_dim)
+            conv_weights = conv_weights.reshape(conv_shape).transpose([2, 3, 1, 0])
 
-                filters = layer.filters
-                size = layer.kernel_size[0]
-                in_dim = layer.get_input_shape_at(0)[-1]
-
-                if bnorm is None:
-                    conv_bias = np.fromfile(wf, dtype=np.float32, count=filters)
-                else:
-                    # darknet [beta, gamma, mean, variance]
-                    bn_weights = np.fromfile(wf, dtype=np.float32, count=4 * filters)
-                    # tf [gamma, beta, mean, variance]
-                    bn_weights = bn_weights.reshape((4, filters))[[1, 0, 2, 3]]
-
-                # darknet shape (out_dim, in_dim, height, width)
-                conv_shape = (filters, in_dim, size, size)
-                conv_weights = np.fromfile(wf, dtype=np.float32, count=np.product(conv_shape))
-
-                # tf shape (height, width, in_dim, out_dim)
-                conv_weights = conv_weights.reshape(conv_shape).transpose([2, 3, 1, 0])
-
-                if bnorm is None:
-                    layer.set_weights([conv_weights, conv_bias])  
-                else:
-                    layer.set_weights([conv_weights])
-                    bnorm.set_weights(bn_weights)
+            if i not in output_pos:
+                conv_layer.set_weights([conv_weights])
+                bn_layer.set_weights(bn_weights)  
+            else:
+                conv_layer.set_weights([conv_weights, conv_bias]) 
 
         current = wf.tell()
         end = wf.seek(0, 2)

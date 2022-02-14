@@ -72,56 +72,32 @@ def load_darknet_weights(model, weights_file, tiny=False):
     wf.close()
 
 
-def broadcast_iou(box_1, box_2):
-    # box_1: (..., (x1, y1, x2, y2))
-    # box_2: (N, (x1, y1, x2, y2))
+def broadcast_iou(pbox, gbox):
+
+    """Calculates the IOU of predicted (pbox) to ground-truth boxes (gbox)
+
+    :param pbox: (ngrid, ngrid, 3, (x1, y1, x2, y2))
+    :param gbox: (N, (x1, y1, x2, y2))
+
+    """
 
     # broadcast boxes
-    box_1 = tf.expand_dims(box_1, -2)
-    box_2 = tf.expand_dims(box_2, 0)
+    pbox = tf.expand_dims(pbox, -2)
+    gbox = tf.expand_dims(gbox, 0)
+
     # new_shape: (..., N, (x1, y1, x2, y2))
-    new_shape = tf.broadcast_dynamic_shape(tf.shape(box_1), tf.shape(box_2))
-    box_1 = tf.broadcast_to(box_1, new_shape)
-    box_2 = tf.broadcast_to(box_2, new_shape)
+    new_shape = tf.broadcast_dynamic_shape(tf.shape(pbox), tf.shape(gbox))
+    pbox = tf.broadcast_to(pbox, new_shape)
+    gbox = tf.broadcast_to(gbox, new_shape)
 
-    int_w = tf.maximum(tf.minimum(box_1[..., 2], box_2[..., 2]) -
-                       tf.maximum(box_1[..., 0], box_2[..., 0]), 0)
-    int_h = tf.maximum(tf.minimum(box_1[..., 3], box_2[..., 3]) -
-                       tf.maximum(box_1[..., 1], box_2[..., 1]), 0)
+    int_w = tf.maximum(tf.minimum(pbox[..., 2], gbox[..., 2]) -
+                       tf.maximum(pbox[..., 0], gbox[..., 0]), 0)
+    int_h = tf.maximum(tf.minimum(pbox[..., 3], gbox[..., 3]) -
+                       tf.maximum(pbox[..., 1], gbox[..., 1]), 0)
     int_area = int_w * int_h
-    box_1_area = (box_1[..., 2] - box_1[..., 0]) * (box_1[..., 3] - box_1[..., 1])
-    box_2_area = (box_2[..., 2] - box_2[..., 0]) * (box_2[..., 3] - box_2[..., 1])
-    return int_area / (box_1_area + box_2_area - int_area)
-
-
-def draw_outputs(img, outputs, class_names):
-    boxes, objectness, classes, nums = outputs
-    boxes, objectness, classes, nums = boxes[0], objectness[0], classes[0], nums[0]
-    wh = np.flip(img.shape[0:2])
-    for i in range(nums):
-        x1y1 = tuple((np.array(boxes[i][0:2]) * wh).astype(np.int32))
-        x2y2 = tuple((np.array(boxes[i][2:4]) * wh).astype(np.int32))
-        img = cv2.rectangle(img, x1y1, x2y2, (255, 0, 0), 2)
-        img = cv2.putText(img, '{} {:.4f}'.format(
-            class_names[int(classes[i])], objectness[i]),
-            x1y1, cv2.FONT_HERSHEY_COMPLEX_SMALL, 1, (0, 0, 255), 2)
-    return img
-
-
-def draw_labels(x, y, class_names):
-    img = x.numpy()
-    boxes, classes = tf.split(y, (4, 1), axis=-1)
-    classes = classes[..., 0]
-    wh = np.flip(img.shape[0:2])
-    for i in range(len(boxes)):
-        x1y1 = tuple((np.array(boxes[i][0:2]) * wh).astype(np.int32))
-        x2y2 = tuple((np.array(boxes[i][2:4]) * wh).astype(np.int32))
-        img = cv2.rectangle(img, x1y1, x2y2, (255, 0, 0), 2)
-        img = cv2.putText(img, class_names[classes[i]],
-                          x1y1, cv2.FONT_HERSHEY_COMPLEX_SMALL,
-                          1, (0, 0, 255), 2)
-    return img
-
+    pbox_area = (pbox[..., 2] - pbox[..., 0]) * (pbox[..., 3] - pbox[..., 1])
+    gbox_area = (gbox[..., 2] - gbox[..., 0]) * (gbox[..., 3] - gbox[..., 1])
+    return int_area / (pbox_area + gbox_area - int_area)
 
 def freeze_all(model, frozen=True):
     model.trainable = not frozen
@@ -138,3 +114,66 @@ def trim_zeros_graph(boxes, name='trim_zeros'):
     non_zeros = tf.cast(tf.reduce_sum(tf.abs(boxes), axis=1), tf.bool)
     boxes = tf.boolean_mask(boxes, non_zeros, name=name)
     return boxes, non_zeros
+
+_false = tf.constant(False, tf.bool)
+_true = tf.constant(True, tf.bool)
+
+def GridToImg(tensor, anchors, isforward = _true):
+
+    """Converts grid space to normalised image coordinates 
+    (and vice versa) in grid form.
+    
+    :param tensor: single output layer predictions in grid or normalised coordinates
+                   grid/img: [nbatch, grid, grid, 3, [x, y, w, h, ...]]
+                  
+    :param anchors: anchors associated with single output layer 
+    :option isforward: grid to image (True)
+                       image to grid (False)    
+    """
+
+    grid_size = tf.shape(tensor)[1]
+    grid = tf.meshgrid(tf.range(grid_size), tf.range(grid_size))
+    grid = tf.expand_dims(tf.stack(grid, axis=-1), axis=2)   
+
+    xy_t = tensor[..., 0:2]
+    wh_t = tensor[..., 2:4]
+
+    def true_fn():
+        xy_img = (xy_t + tf.cast(grid, tf.float32)) / tf.cast(grid_size, tf.float32)
+        wh_img = tf.exp(wh_t) * anchors
+        return tf.concat([xy_img, wh_img], axis=-1)
+
+    def false_fn():
+        xy_grd = xy_t * tf.cast(grid_size, tf.float32) - tf.cast(grid, tf.float32)
+        wh_grd = tf.math.log(wh_t / anchors)
+        wh_grd = tf.where(tf.math.is_inf(wh_grd), tf.zeros_like(wh_grd), wh_grd)  
+        return tf.concat([xy_grd, wh_grd], axis=-1)
+
+    return tf.cond(isforward, true_fn, false_fn)
+
+def CenterToMinMax(tensor, isforward = _true):
+
+    """Converts centered (x, y, w, h) to min-max (x1, y1, x2, y2) coordinates 
+    (and vice versa).
+
+    :param tensor: [..., (x, y, w, h)]      (if centered)
+                   [..., (x1, y1, x2, y2)]  (if min-max)
+
+    :option isforward: (x, y, w, h) to (x1, y1, x2, y2) [True]
+                       (x1, y1, x2, y2) to (x, y, w, h) [False]
+    """
+
+    xy_t = tensor[..., 0:2]
+    tt_t = tensor[..., 2:4]
+
+    def true_fn():
+        box_min = xy_t - tt_t / 2
+        box_max = xy_t + tt_t / 2
+        return tf.concat([box_min, box_max], axis=-1)
+
+    def false_fn():
+        box_xy = (xy_t + tt_t) / 2
+        box_wh = tt_t - xy_t
+        return tf.concat([box_xy, box_wh], axis=-1)
+
+    return tf.cond(isforward, true_fn, false_fn)

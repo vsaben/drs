@@ -1,0 +1,10 @@
+.vs/
+__pycache__/
+admin/
+gta/bin/
+gta/dll/
+gta/old/
+gta/packages/
+ml/.venv/
+writeup/
+research/

@@ -38,7 +38,7 @@ from methods._data.reformat import get_bb2d, VEHICLE_CLASSES, WEATHER_CLASSES
 
 # PART A: Read in and extract data ========================================================= 
 
-@tf.function
+
 def extract_data(x, cpos, features, camera, environment):
     """Extract data elements and summary information
 
@@ -86,7 +86,11 @@ def extract_data(x, cpos, features, camera, environment):
     nwthr = len(WEATHER_CLASSES)
     wfreq = tf.math.bincount(wthr, minlength = nwthr, maxlength = nwthr)
 
-    return [box_wh, N, ndam, occ, trufreq, cfreq, dims, wfreq, rain, snow] 
+    # Maximal depth
+
+    depth = cpos[:, 2]
+
+    return [box_wh, N, ndam, occ, trufreq, cfreq, dims, wfreq, rain, snow, depth] 
 
 def process_data(data_path, image_size, nclusters):
     
@@ -108,7 +112,7 @@ def process_data(data_path, image_size, nclusters):
     # Read in and partially process data  
 
     ds = read_and_parse(data_path, "train", image_size)                   # [x, cpos, features, camera, environment]
-    ds_out = list(ds.map(extract_data))                                    # [box_wh, N, ndam, occ, trufreq, cfreq, dims, wfreq, rain, snow]                                   
+    ds_out = list(ds.map(extract_data))                                   # [box_wh, N, ndam, occ, trufreq, cfreq, dims, wfreq, rain, snow, depth]                                   
     ds_lst = list(zip(*ds_out))
 
     # Transform data into its desired form
@@ -142,6 +146,9 @@ def process_data(data_path, image_size, nclusters):
     arr_snow = np.concatenate(ds_lst[9])
     median_ifsnow = np.median(arr_snow[arr_snow > 0], axis = 0)
 
+    max_depths = np.concatenate(ds_lst[10])
+    max_depth = np.max(max_depths)
+
     # Result dictionary
 
     res_dict = {"centroids_lst": centroids_lst, 
@@ -158,7 +165,8 @@ def process_data(data_path, image_size, nclusters):
                 "rain_fivesum": rain_fivesum,
                 "snow_fivesum": snow_fivesum,
                 "median_ifrain": median_ifrain,
-                "median_ifsnow": median_ifsnow}
+                "median_ifsnow": median_ifsnow, 
+                "max_depth": max_depth}
 
     return res_dict
 
@@ -301,10 +309,15 @@ def write_explore(output_dir, res_dict, image_size, cfg = None):
     cls_txt = " ".join(["{:s} {:d}".format(VEHICLE_CLASSES[i], int(v)) for i, v in enumerate(r['cls_freq'])])
     f.write("Vehicle Class Frequency: {:s}\n\n".format(cls_txt))
 
+    # > Max depth
+
+    f.write("Maximum Depth: {:.6f}\n\n".format(r['max_depth']))
+
     # > Dimension anchor
 
     dim_txt = " ".join(map(str, np.round(r['median_dims'], 6).tolist()))
     f.write("Median Vehicle Dimensions: {:s}\n\n".format(dim_txt))
+
 
     # > Environment
 
@@ -341,7 +354,8 @@ def write_explore(output_dir, res_dict, image_size, cfg = None):
         setattrs(cfg, DAMAGED_RATIO = damaged_ratio,
                       MAX_GT_INSTANCES = max_boxes, 
                       ANCHORS = anchors.tolist(), 
-                      DIM_ANCHOR = r['median_dims'].tolist())
+                      DIM_ANCHOR = r['median_dims'].tolist(),
+                      MAX_DEPTH = r['max_depth'])
 
         print("Updated cfg | exploratory analysis")
     

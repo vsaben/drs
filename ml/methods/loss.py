@@ -10,16 +10,12 @@
 """
 
 import numpy as np
-import matplotlib.pyplot as plt 
 
 import tensorflow as tf
 import tensorflow.keras.losses as KLS
 from methods.utils import broadcast_iou
 
-import tensorflow.keras as K 
 import tensorflow.keras.layers as KL 
-import tensorflow.keras.metrics as KM
-import tensorflow.keras.initializers as KI
 
 # PART A: Backbone ======================================================================
 
@@ -29,75 +25,79 @@ def compute_rpn_losses(pd_boxes, gt_boxes, cfg):
     
     :note: accounts for positive and negative ROI through objectness
 
-    :param pd_boxes: 
+    :param pd_boxes: [grid_s, grid_m, grid_l] | [grid_m, grid_l]
     :param gt_boxes: [grid_s, grid_m, grid_l] | [grid_m, grid_l]
     :param cfg: base configuration settings
 
     :result: batch rpn loss
     """
 
-    _anchors = np.array(cfg['ANCHORS'], np.float32)
+    _anchors = tf.constant(cfg['ANCHORS'], tf.float32)
+    _xyscales =  tf.constant(cfg['XYSCALE'], tf.float32)
 
-    losses = []
+    losses = [] 
     for i, pbox in enumerate(pd_boxes):
-        anchors = _anchors[cfg['MASKS'][i]]
-        loss = single_layer_yolo_loss(pbox, gt_boxes[i], anchors, i, cfg)       
+        anchors = tf.gather(_anchors, cfg['MASKS'][i])       
+        loss = single_layer_yolo_loss(pbox, gt_boxes[i], anchors, _xyscales[i], cfg)            
         losses.append(loss) 
-
+    
     return tf.stack(losses, axis=1)                 # [nbatch, nlevels, nlosses]
     
-def single_layer_yolo_loss(pbox, gbox, anchors, level, cfg):
+def single_layer_yolo_loss(pbox, gbox, anchors, xyscale_i, cfg):
 
-    # 1: Transform predicted boxes [nbatch, grid, grid, anchors, (x, y, w, h, obj, .. cls)] 
+    # 1: Transform predicted boxes [nbatch, grid, grid, anchors, (x, y, w, h, obj, .. cls)] (grid) 
 
-    pd_box, pd_obj, pd_cls, pd_xywh = pbox
-    pd_xy = pd_xywh[..., 0:2]
-    pd_wh = pd_xywh[..., 2:4]
+    pd_box_img, pd_obj, pd_cls, pd_grd = pbox 
+    pd_xy = pd_grd[..., 0:2]
+    pd_wh = pd_grd[..., 2:4]
 
-    # 2: Transform ground truth boxes [nbatch, grid, grid, anchors, (x1, y1, x2, y2, obj, .. cls, .. features)]
+    # 2: Convert normalised image gt boxes to grid space [nbatch, grid, grid, anchors, (x1, y1, x2, y2, obj, .. cls, .. features)] (normalised image)
 
-    gt_box, gt_obj, gt_cls, gt_pose = tf.split(gbox, (4, 1, 1, 10), axis=-1)   
+    gt_box_img, gt_obj, gt_cls, gt_pose = tf.split(gbox, (4, 1, 1, 10), axis=-1)   
 
-    gt_xy = (gt_box[..., 0:2] + gt_box[..., 2:4]) / 2
-    gt_wh = gt_box[..., 2:4] - gt_box[..., 0:2]
+    gt_box_x1y1 = gt_box_img[..., 0:2]
+    gt_box_x2y2 = gt_box_img[..., 2:4]
 
-    # 3: Give a higher weighting to smaller boxes [ADJUST]
-        
-    box_loss_scale = 2 - gt_wh[..., 0] * gt_wh[..., 1]
+    gt_img_xy = (gt_box_x1y1 + gt_box_x2y2) / 2
+    gt_img_wh = gt_box_x2y2 - gt_box_x1y1
 
-    # 4: Recollect ground truth bbox in image coordinates 
+    gt_img = tf.concat([gt_img_xy, gt_img_wh], axis=-1)                # [x1, y1, x2, y2] >> [x, y, w, h]
     
-    grid_size = tf.shape(gbox)[1]
+    # > Give a higher weighting to smaller boxes 
+    
+    box_loss_scale = 2 - gt_img_wh[..., 0] * gt_img_wh[..., 1]
+    
+    # > Continue: (image) to (grid)
+    
+    grid_size = tf.shape(gt_img)[1]
     grid = tf.meshgrid(tf.range(grid_size), tf.range(grid_size))
-    grid = tf.expand_dims(tf.stack(grid, axis=-1), axis=2)
-        
-    gt_xy = gt_xy * tf.cast(grid_size, tf.float32) - tf.cast(grid, tf.float32)
-    gt_wh = tf.math.log(gt_wh / anchors)
-    gt_wh = tf.where(tf.math.is_inf(gt_wh), tf.zeros_like(gt_wh), gt_wh)
+    grid = tf.expand_dims(tf.stack(grid, axis=-1), axis=2)   
+
+    gt_xy = (gt_img_xy * tf.cast(grid_size, tf.float32) - tf.cast(grid, tf.float32) + 0.5 * (xyscale_i - 1)) / xyscale_i
+    gt_wh = tf.math.log(gt_img_wh / anchors)
+    gt_wh = tf.where(tf.math.is_inf(gt_wh), tf.zeros_like(gt_wh), gt_wh)  
 
     # 5: Calculate masks
 
-    obj_mask = tf.squeeze(gt_obj, -1)
+    obj_mask = tf.squeeze(gt_obj, axis=-1)
 
     best_iou = tf.map_fn(lambda x: 
                             tf.reduce_max(                                                      # Ignore FP when iou > threshold
                                 broadcast_iou(
                                     x[0], 
-                                    tf.boolean_mask(x[1], tf.cast(x[2], tf.bool))), axis=-1),
-                            (pd_box, gt_box, obj_mask), tf.float32) 
+                                    tf.boolean_mask(x[1], tf.cast(x[2], tf.bool))), axis=-1),   # Prediction grids matching ground truth
+                            (pd_box_img, gt_box_img, obj_mask), tf.float32) 
 
-    ignore_mask = tf.cast(best_iou < cfg['RPN_IOU_THRESHOLD'], tf.float32)
+    ignore_mask = tf.cast(best_iou < cfg['RPN_IOU_THRESHOLD'], tf.float32, name = 'ignore_mask')
 
-    # 6: Calculate losses [nbatch, gridx, gridy, anchors]
+    # 6: Calculate losses [nbatch, gridx, gridy, anchors] (based on relative grid coordinates)
 
     xy_loss = obj_mask * box_loss_scale * tf.reduce_sum(tf.square(gt_xy - pd_xy), axis=-1)
     wh_loss = obj_mask * box_loss_scale * tf.reduce_sum(tf.square(gt_wh - pd_wh), axis=-1)
 
-    obj_entropy = KLS.binary_crossentropy(y_true=gt_obj, y_pred=pd_obj)
+    obj_entropy = KLS.binary_crossentropy(gt_obj, pd_obj)
     objcf_loss = obj_mask * obj_entropy
     nobjcf_loss = (1 - obj_mask) * ignore_mask * obj_entropy       
-    #o_loss = tf.where(tf.math.is_nan(objcf_loss), tf.zeros_like(objcf_loss), objcf_loss)
-    #n_loss = tf.where(tf.math.is_nan(nobjcf_loss), tf.zeros_like(nobjcf_loss), nobjcf_loss)
     obj_loss = objcf_loss + nobjcf_loss        
         
     cls_mask_unweighted = tf.squeeze(gt_cls, -1) # [nbatch, gsize, gsize, plevel_anchors] / make more universal
@@ -114,87 +114,15 @@ def single_layer_yolo_loss(pbox, gbox, anchors, level, cfg):
 
     reduced_losses = []
     for lss in sublosses:
-        subloss = tf.reduce_sum(lss, axis = (1, 2, 3))
+        subloss = tf.reduce_sum(lss, axis = (1, 2, 3)) 
         reduced_losses.append(subloss)
-     
+
     return tf.stack(reduced_losses, axis=1) # [nbatch, 1, 6]
-
-class ClsMetricLayer(KL.Layer):
-
-    def __init__(self, cfg, name=None, *args, **kwargs):
-        super(ClsMetricLayer, self).__init__(name=name, *args, **kwargs)
-        self.cfg = cfg
-
-    def call(self, inputs):
-
-        """Log class losses as metrics, at all abstraction levels"""
-        
-        pd_boxes, gt_boxes = inputs
-        nlevels = len(gt_boxes)
-        
-        flat_cms = []
-
-        # Per-level
-
-        for lvl in range(nlevels):
-            pcls, gcls = self.extract_single_layer_cls(pd_boxes[lvl], gt_boxes[lvl])
-
-            cm = tf.math.confusion_matrix(gcls, pcls, 
-                                          num_classes = self.cfg['NUM_CLASSES'], 
-                                          name = 'cm_{:d}'.format(lvl))
-
-            flat_cm = tf.cast(tf.reshape(cm, [-1]), tf.float32)
-            self.add_cm_metrics(flat_cm, lvl)
-            flat_cms.append(flat_cm)
-
-        # Combined
-
-        stack_cm = tf.stack(flat_cms)             # [nlevel, 4]
-        flat_cm = tf.reduce_sum(stack_cm, axis=0) # [4]
-        self.add_cm_metrics(flat_cm, -1)
-     
-        return flat_cm
-
-    def extract_single_layer_cls(self, pbox, gbox):
-
-        """Extracts predicted and ground-truth class values
-        from yolo grids, at different scales
     
-        :param pd_cls: [nbatch, gsize, gsize, plevel, [P(Class_1), ..., P(Class_n)]]
-        :param gt_cls: [nbatch, gsize, gsize, plevel, cls integer]
-
-        :result: [nbatch, ndetect, nclass + 1 (class prob + actual cls)]
-        """
-
-        _, _, pd_cls, _ = pbox
-        _, gt_obj, gt_cls, _ = tf.split(gbox, (4, 1, 1, 10), axis=-1)
+class RpnLossLayer(KL.Layer):   
     
-        obj_mask = tf.squeeze(gt_obj, -1)        # [nbatch, gsize, gsize, plevel]
-
-        pcls_probs = tf.boolean_mask(pd_cls, obj_mask)                # [ndetect, ncls]
-        pcls = tf.argmax(pcls_probs, axis=-1)                         # [ndetect]
-        gcls = tf.squeeze(tf.boolean_mask(gt_cls, obj_mask), axis=-1) # [ndetect]
-
-        return pcls, gcls
-
-    def add_cm_metrics(self, flat_cm, level):
-
-        suffix = "_{:d}".format(level) if level > -1 else "" 
-        
-        for i, short_name in enumerate(['tn', 'fn', 'fp', 'tp']):
-            
-            name = "{:s}".format(short_name) + suffix
-            self.add_metric(flat_cm[i], name=name, aggregation='mean')
-
-    def get_config(self):
-        config = super(ClsMetricLayer, self).get_config() 
-        config.update({'cfg': self.cfg})
-        return config
-    
-class RpnMetricLayer(KL.Layer):   
-    
-    def __init__(self, cfg, name=None, *args, **kwargs):
-        super(RpnMetricLayer, self).__init__(name=name, *args, **kwargs)
+    def __init__(self, cfg, name=None):
+        super(RpnLossLayer, self).__init__(name=name)
         self.cfg = cfg
 
         nlevels = len(cfg['MASKS'])
@@ -218,11 +146,11 @@ class RpnMetricLayer(KL.Layer):
         
         pd_boxes, gt_boxes = inputs
 
-        # Bounding Box
+        # Losses
 
         all_rpn_losses = KL.Lambda(lambda x: compute_rpn_losses(*x, self.cfg))([pd_boxes, gt_boxes])
 
-        # Type [t]
+        # > Type [t]
 
         all_tloss = tf.transpose(all_rpn_losses, [0, 2, 1])             # [nbatch, nlosses, nlevels]        
         weighted_tloss = all_tloss * self.lweights                      # [nbatch, nlosses, nlevels]        
@@ -233,7 +161,7 @@ class RpnMetricLayer(KL.Layer):
         for i in range(ntypes):
             self.add_metric(mean_tloss[i], name=self.tnames[i], aggregation="mean") 
         
-        # Level [l]
+        # > Level [l]
 
         weighted_lloss = all_rpn_losses * self.tweights                # [nbatch, nlevels, nlosses]
         sum_lloss = tf.reduce_sum(weighted_lloss, axis = 2)            # [nbatch, nlevels]
@@ -243,7 +171,7 @@ class RpnMetricLayer(KL.Layer):
         for i in range(nlevels):
             self.add_metric(mean_lloss[i], name=self.lnames[i], aggregation="mean") 
 
-        # Type-Level
+        # > Type-Level
 
         for lvl in range(nlevels):
             for typ in range(ntypes): 
@@ -259,7 +187,7 @@ class RpnMetricLayer(KL.Layer):
         return rpn_loss
 
     def get_config(self):    
-        config = super(RpnMetricLayer, self).get_config()        
+        config = super(RpnLossLayer, self).get_config()        
         config.update({'cfg': self.cfg})        
         return config
 
@@ -276,25 +204,33 @@ class RpnMetricLayer(KL.Layer):
 def compute_pose_losses(pd_pose, gt_pose, cfg):
     """
      :note: only positive ROIs contribute to loss (similar to bbox in mask-rcnn)
-     :note: remove padding check depth = 0 (only one possible)
+     :note: remove padding check y2 = 0 (only one possible)
      :note: add configuration (cfg) to allow for different loss functions
     """
 
-    gt_cond = gt_pose[..., 6]  
+    gt_cond = gt_pose[..., 2]  
     positive_ix = tf.where(gt_cond > 0)            # [none, 2] --> (instance index, cond true index)
     
     pd_pose = tf.gather_nd(pd_pose, positive_ix)   # [none, 10] --> (true instance combined, pose) 
     gt_pose = tf.gather_nd(gt_pose, positive_ix)
 
-    pd_center, pd_depth, pd_dims, pd_quart = tf.split(pd_pose, (2, 1, 3, 4), axis = -1)                  # [nbatch, ndetect, 10]  
-    gt_rpn, gt_center, gt_depth, gt_dims, gt_quart = tf.split(gt_pose, (4, 2, 1, 3, 4), axis = -1)       # [nbatch, ndetect, 4 + 10]
+    def compute_pose_loss(pd_pose, gt_pose, cfg):
 
-    center_loss = pose_center_loss(pd_center, gt_center, gt_rpn)
-    depth_loss = pose_depth_loss(pd_depth, gt_depth)
-    dim_loss = pose_dim_loss(pd_dims, gt_dims)
-    quart_loss = pose_quart_loss(pd_quart, gt_quart)
+        pd_center, pd_depth, pd_dims, pd_quart = tf.split(pd_pose, (2, 1, 3, 4), axis = -1)                  # [nbatch, ndetect, 10]  
+        gt_rpn, gt_center, gt_depth, gt_dims, gt_quart = tf.split(gt_pose, (4, 2, 1, 3, 4), axis = -1)       # [nbatch, ndetect, 4 + 10]
 
-    return tf.stack([center_loss, depth_loss, dim_loss, quart_loss])
+        center_loss = pose_center_loss(pd_center, gt_center, gt_rpn)
+        depth_loss = pose_depth_loss(pd_depth, gt_depth)
+        dim_loss = pose_dim_loss(pd_dims, gt_dims)
+        quart_loss = pose_quart_loss(pd_quart, gt_quart)
+
+        return tf.stack([center_loss, depth_loss, dim_loss, quart_loss])
+
+    loss = tf.cond(tf.size(gt_pose) == 0,
+                   lambda: tf.zeros(4, tf.float32),
+                   lambda: compute_pose_loss(pd_pose, gt_pose, cfg))
+
+    return loss
 
 def pose_center_loss(pd_center, gt_center, gt_rpn):
     
@@ -313,6 +249,7 @@ def pose_center_loss(pd_center, gt_center, gt_rpn):
 
     square_loss = tf.square(pd_center - gt_center)                          # [nbatch, ndetect, 2]
     sum_loss = box_loss_scale * tf.reduce_sum(square_loss, axis = -1)       # [nbatch, ndetect]   
+
     return tf.reduce_mean(sum_loss)                                         # [1]
 
 def pose_depth_loss(pd_depth, gt_depth):
@@ -325,8 +262,11 @@ def pose_depth_loss(pd_depth, gt_depth):
 
     """
 
-    D = tf.square(tf.math.log(pd_depth / gt_depth))     # [nbatch, ndetect, 1] 
-    return tf.reduce_mean(D)                            # [1]
+    log_pd_depth = tf.math.log(pd_depth)
+    log_gt_depth = tf.math.log(gt_depth)
+
+    D = tf.square(log_pd_depth - log_gt_depth)                           # [nbatch, ndetect, 1] 
+    return tf.reduce_mean(D)                                             # [1]
 
 def pose_dim_loss(pd_dims, gt_dims):
     
@@ -355,10 +295,10 @@ def pose_quart_loss(pd_quart, gt_quart):
     sum_loss = tf.norm(gt_quart - pd_quart / tf.norm(pd_quart, axis = -1, keepdims=True), ord = 1, axis = -1) # [nbatch, ndetect]
     return tf.reduce_mean(sum_loss)                                                                           # [1]
 
-class PoseMetricLayer(KL.Layer):
+class PoseLossLayer(KL.Layer):
     
     def __init__(self, cfg, name=None, *args, **kwargs): 
-        super(PoseMetricLayer, self).__init__(name=name, *args, **kwargs)
+        super(PoseLossLayer, self).__init__(name=name, *args, **kwargs)
         self.cfg = cfg
         
         pnames, pweights = list(zip(*cfg['POSE_SUBLOSSES'].items())) 
@@ -388,7 +328,7 @@ class PoseMetricLayer(KL.Layer):
         return pose_loss
 
     def get_config(self): 
-        config = super(PoseMetricLayer, self).get_config()
+        config = super(PoseLossLayer, self).get_config()
         config.update({'cfg': self.cfg})
         return config
 
@@ -396,23 +336,23 @@ class PoseMetricLayer(KL.Layer):
 
 class CombineLossesLayer(KL.Layer):
 
-    def __init__(self, cfg, name=None, *args, **kwargs):
+    def __init__(self, cfg, verbose, name=None, *args, **kwargs):
         super(CombineLossesLayer, self).__init__(name=name, *args, **kwargs)
         self.cfg = cfg
+        self.verbose = verbose
         self.scales = tf.constant(list(cfg['LOSSES'].values()))
 
     def call(self, inputs):
-
-        rpn_loss, pose_loss, cls_metric = inputs
-
+        rpn_loss, pose_loss = inputs[:2] if self.verbose else inputs
         losses = tf.stack([rpn_loss, pose_loss])
         final_loss = tf.reduce_sum(losses * self.scales, name = 'loss')
         self.add_loss(final_loss)
         return final_loss
-
+        
     def get_config(self): 
         config = super(CombineLossesLayer, self).get_config()
-        config.update({'cfg': self.cfg})
+        config.update({'cfg': self.cfg, 
+                       'verbose': self.verbose})
         return config
 
 

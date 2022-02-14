@@ -29,11 +29,12 @@ from methods.visualise import get_ann_images
 from methods.model import DRSYolo
 from config import Config
 
-flags.DEFINE_string('name',         'default',             'configuration name')
-flags.DEFINE_string('model_dir',    './models/',           'storage directory for all models')
-flags.DEFINE_string('example_dir',  './examples/',         'storage directory for all examples')
-flags.DEFINE_string('tfrecord',     '*.tfrecord',          'regex for tfrecords containing image and camera metadata') 
-flags.DEFINE_boolean('save',         False,                'option: whether to save annotated image')
+flags.DEFINE_string('name',         'default',        'configuration name')
+flags.DEFINE_string('model_dir',    './models/',      'storage directory for all models')
+flags.DEFINE_string('weight_file',  'weights',        'weights file name')
+flags.DEFINE_string('example_dir',  './examples/',    'storage directory for all examples')
+flags.DEFINE_string('tfrecord',     '*.tfrecord',     'regex for tfrecords containing image and camera metadata') 
+flags.DEFINE_boolean('save',         False,           'option: whether to save annotated image')
 
 def main(_argv):
     
@@ -50,7 +51,7 @@ def main(_argv):
     cfg_mod = cfg.to_dict()
 
     model = DRSYolo(mode="detection", cfg=cfg_mod)
-    model.build()   
+    model.build(weight_path=FLAGS.weight_file)   
     model.summary() 
 
     # PART B: Load data and make prediction ===============
@@ -82,14 +83,6 @@ def main(_argv):
     for i, img in enumerate(ann_images.numpy()):
         cv2.imshow('image', img.astype(np.uint8))
         cv2.waitKey()
-
-    # PART D: Draw annotations =========================
-
-    #    if FLAGS.save:
-    #
-    #        cv2.imwrite()
-    #        logging.info('output saved to: {}'.format(FLAGS.output))
-
 
 if __name__ == '__main__':
     try:

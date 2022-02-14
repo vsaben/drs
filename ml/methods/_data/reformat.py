@@ -16,7 +16,14 @@ _true = tf.constant(True, dtype=tf.bool)
 
 # PART A ==================================================================================
 
-def compute_bb3d(camera, cpos_elem):
+def compute_bb3d_2d(camera, cpos_elem):
+
+    """Converts bb3d in camera to screen space"""
+
+    corner_cam = compute_bb3d_3d(camera, cpos_elem)
+    return tf.map_fn(lambda cw: C2S(camera, cw), corner_cam, dtype = tf.int32, parallel_iterations=8)   
+
+def compute_bb3d_3d(camera, cpos_elem):
     
     """Computes 2D normalised screen co-ordinates of a vehicle's 3D bounding box vertices
     
@@ -25,12 +32,12 @@ def compute_bb3d(camera, cpos_elem):
                                           dim_x, dim_y, dim_z,
                                           rot_x, rot_y, rot_z]
 
-    :return: (9, 2) array, where each row specifies (x, y) normalised coordinates    
+    :return: (8, 3) array, where each row specifies (x, y, z) camera coordinates    
     """
 
     # Target rotation
     
-    cpos_elem_8 = get_rel_yaw(camera, cpos_elem[8], _false)
+    cpos_elem_8 = get_abs_tar_yaw(camera, cpos_elem[8])
     tar_abs_rot = tf.stack([cpos_elem[6], cpos_elem[7], cpos_elem_8])   
     R_tar = create_tar_rot(tar_abs_rot)
 
@@ -43,88 +50,92 @@ def compute_bb3d(camera, cpos_elem):
     # Camera coordinates [Rotated corners + vehicle center]
     
     oriented_corners = tf.cast(tf.matmul(R_tar, corner_dims), tf.float64)
-    center = tf.cast(cpos_elem[:3], tf.float64)                           
+    center = tf.cast(cpos_elem[:3], tf.float64)
 
-    corner_cam = tf.transpose(tf.matmul(tf.transpose(camera['R']), oriented_corners)) + center     
-    return tf.map_fn(lambda cw: C2S(camera, cw), corner_cam, dtype = tf.int32, parallel_iterations=8)    
+    return tf.transpose(tf.matmul(tf.transpose(tf.cast(camera['R'], tf.float64)), 
+                                  oriented_corners)) + center
+     
 
-def get_rel_yaw(camera, tar_yaw, is_tar_to_cam):
+def get_abs_tar_yaw(camera, rel_yaw):
 
-    """Converts absolute gta-extracted vehicle yaw relative to the camera yaw, and vice versa    
+    """Converts derived relative yaw to absolute gta-extracted vehicle yaw.    
     :note: camera zero-yaw axis is determined by the up/down orientation of its vertical axis
     :note: camera yaw is harmonised to ensure yaw is always defined relative to an upward-facing
            vertical axis
 
-    :param cam_R: camera rotation matrix
-    :param cam_yaw: absolute camera yaw
-    :param tar_yaw: absolute vehicle yaw
-    :param is_tar_to_cam: boolen specifying target-to-camera conversion direction
+    :param camera: camera property dictionary
+    :param rel_yaw: relative vehicle-to-camera yaw
 
-    :return: converted vehicle yaw
+    :return: absolute vehicle yaw (as specificied in GTA)
     """
 
     cam_yaw = tf.cast(camera['rot'][2], tf.float32)
-    dir_yaw = tf.greater(camera['R'][2, 1], 0)
-    
-    def true_fn():
-        adj_yaw = realign_rad(tar_yaw - cam_yaw)
-        adj_yaw = tf.cond(tf.math.logical_not(dir_yaw), 
-                          lambda: realign_yaw(adj_yaw, _true), 
-                          lambda: adj_yaw)
-        return adj_yaw
+    dir_yaw = tf.greater(camera['R'][2, 1], 0)   
 
-    def false_fn():
-        t_yaw = tf.cond(tf.math.logical_not(dir_yaw), 
-                        lambda: realign_yaw(tar_yaw, _false), 
-                        lambda: tar_yaw)
-        adj_yaw = t_yaw + cam_yaw
-        return adj_yaw
+    rel_yaw = realign_rad(rel_yaw)
 
-    adj_yaw = tf.cond(is_tar_to_cam, 
-                      true_fn, 
-                      false_fn)
-
-    return adj_yaw
+    r_yaw = tf.cond(tf.math.logical_not(dir_yaw), 
+                    lambda: realign_rel_yaw(rel_yaw), 
+                    lambda: rel_yaw)
+    return r_yaw + cam_yaw
  
-def realign_yaw(theta, is_tar_to_cam):
+def realign_rel_yaw(rel_yaw):
 
-    """Harmonises relative yaw measures by reorienting the camera's vertical axis upward (flip), 
-    and vice versa, depending on the target-to-camera conversion direction
+    """Regenerates gta-extracted target yaw by undoing camera-target vertical axis reorientation
 
     :param theta: vehicle's relative yaw
-    :param is_tar_to_cam: boolean specifying the target-to-camera conversion direction
-
-    :result: float tensor 
     """
+    
+    break_lb = tf.logical_and(tf.greater_equal(rel_yaw, -pi), tf.less_equal(rel_yaw, 0))    
+    break_ub = tf.logical_and(tf.greater(rel_yaw, 0), tf.less_equal(rel_yaw, pi))   
 
-    f = tf.cond(is_tar_to_cam, lambda: pi, lambda: -pi)
-    
-    break_lb = tf.logical_and(tf.greater_equal(theta, -pi), tf.less_equal(theta, 0))    
-    break_ub = tf.logical_and(tf.greater(theta, 0), tf.less_equal(theta, pi))
-    
-    theta = tf.case([(break_lb, lambda: theta + f),  # Test 1: theta >= -pi and theta <= 0 
-                     (break_ub, lambda: theta - f)], # Test 2: theta > 0 and theta <= pi
-                    exclusive=True)
-    return theta                                                                   
+    rel_yaw = tf.case([(break_lb, lambda: rel_yaw - pi),  # Test 1: theta >= -pi and theta <= 0 
+                       (break_ub, lambda: rel_yaw + pi)], # Test 2: theta > 0 and theta <= pi
+                      default=lambda: 0.0, # Test-stage
+                      exclusive=True)
+    return rel_yaw                                                                   
 
 def realign_rad(rad):
 
     """Simplifies radian values to their equivalent value between -pi and pi
     
+    :note: already specified with rotation axis
+    :note: tf.mod >> Not same as python (remainder is not the same sign as the denominator)
+
     :param rad: input radian value
 
     :result: radian constant float tensor between -pi and pi 
     """
 
-    within_b = tf.logical_and(tf.greater_equal(rad, -pi), tf.less_equal(rad, pi))
-    break_lb = tf.logical_and(tf.less(rad, -pi), tf.greater_equal(rad, -2*pi))
-    break_ub = tf.logical_and(tf.greater(rad, pi), tf.less_equal(rad, 2*pi))
+    npi = tf.math.floordiv(tf.abs(rad), pi) # x // y 
+    remainder = tf.math.mod(rad, pi)
 
-    rad = tf.case([(within_b, lambda: rad), 
-                   (break_lb, lambda: rad + 2*pi), 
-                   (break_ub, lambda: rad - 2*pi)], 
-                  exclusive = True)
-    return rad
+    ispos = tf.equal(remainder / tf.abs(remainder), 1)
+    iseven = tf.equal(tf.math.mod(npi, 2), 0) # even (-pi, 0); odd (0, pi)
+    
+    pos_even = tf.logical_and(ispos, iseven)
+    pos_odd = tf.logical_and(ispos, tf.logical_not(iseven))
+    neg_even = tf.logical_and(tf.logical_not(ispos), iseven)
+    neg_odd = tf.logical_and(tf.logical_not(ispos), tf.logical_not(iseven))
+    
+    res_rad = tf.case([(pos_even, lambda: remainder), 
+                       (pos_odd, lambda: -pi + remainder), 
+                       (neg_even, lambda: remainder), 
+                       (neg_odd, lambda: pi + remainder)], 
+                      exclusive = True)
+
+    return res_rad
+
+
+    # within_b = tf.logical_and(tf.greater_equal(rad, -pi), tf.less_equal(rad, pi))
+    # break_lb = tf.logical_and(tf.less(rad, -pi), tf.greater_equal(rad, -2*pi))
+    # break_ub = tf.logical_and(tf.greater(rad, pi), tf.less_equal(rad, 2*pi))
+
+    # rad = tf.case([(within_b, lambda: rad), 
+    #                (break_lb, lambda: rad + 2*pi), 
+    #                (break_ub, lambda: rad - 2*pi)], 
+    #               exclusive = True)
+    # return rad
 
 def create_tar_rot(euler):
 
@@ -162,6 +173,9 @@ def create_cam_rot(euler):
                             [0, 1, 0]], dtype=tf.float64)
     R = create_tar_rot(euler)    
     return tf.matmul(R, I_switch)
+
+DIM_KEYS = ["ftl", "ftr", "fbl", "fbr",   
+            "btl", "btr", "bbl", "bbr"]
 
 def get_corner_dim(dims):  
     
@@ -220,7 +234,7 @@ def compute_bb2d(camera, cpos_elem):
     :return: (xmin, ymin, xmax, ymax) normalised tensor
     """
 
-    bb3d = compute_bb3d(camera, cpos_elem)
+    bb3d = compute_bb3d_2d(camera, cpos_elem)
     x_vals = bb3d[:, 0]
     y_vals = bb3d[:, 1]
 
@@ -347,6 +361,120 @@ def Q2E(q):
     
     return tf.concat([x, y, z], axis = -1)
 
+def out_pose_to_cpos(cameras, pose, cfg, stack = False):
+
+    """Transforms raw, batched camera and pose 
+    information into a list cpos format (refer result)
+
+    :param cameras: unbatched camera dictionaries
+    :param pose: [ndetect, 
+                    [center (2) {screen}, 
+                     depth (1) {absolute/relative}, 
+                     dims (3) {half},
+                     quat (4)]
+
+    :result: [[n_roi, [pos (3), dims (3), rot (3)]], ...]
+              per image
+    """
+
+    nbatch = len(pose)
+    cpos_lst = [pose_to_cpos(pose[b], cameras[b], cfg) for b in tf.range(nbatch)]
+
+    if not stack:
+        return cpos_lst
+
+    cpos = [c for c in cpos_lst if c != []]
+    return tf.concat(cpos, axis=0, name='out_cpos')
+
+def unpad(tensor, cond_idx):
+
+    """Remove zero padding from a tensor"""
+
+    cond = tensor[..., cond_idx]  
+    pos_ix = tf.where(cond > 0)            # [none, 5/6] --> (instance index, cond true index)
+    
+    return tf.gather_nd(tensor, pos_ix)
+
+def pose_to_cpos(pose, camera, cfg):
+
+    """Converts predicted pose output to an annotation format
+
+    :param pose: [detect, 10] 
+         <center (2) {normalised to image} + 
+          depth (1) + 
+          dims (3) {absolute/relative} + 
+          quat (4) = 10>
+    :param camera: camera property dictionary
+
+    :result: pose annotations in their original format
+             {ndetect, pos (3) + dims (3) + rot (3)}
+    """
+
+    ndetect = tf.shape(pose)[0]
+    if ndetect == 0:
+        return [] 
+
+    # 1-3: Position
+
+    pos = out_pos_to_cam(pose, camera)
+
+    # 4-6: Dimensions 
+
+    dim = pose[..., 3:6]
+    if cfg['USE_DIM_ANCHOR']:
+        med_dims = tf.constant(cfg['DIM_ANCHOR'], tf.float32)
+        dim += med_dims    
+
+    dim = tf.nn.relu(dim)
+
+    # 7-9: Rotation
+
+    quat = pose[..., -4:]
+    rot = Q2E(quat)
+
+    return tf.concat([pos, dim, rot], axis=-1)
+
+
+def out_pos_to_cam(pose, camera):
+
+    """Screen to camera coordinates
+
+    :param center: normalised center coordinates
+    :param Z: predicted depth values
+    :param cam: [W (1) + H (1) + fx (1) + fy (1) = 4]
+
+    :result: [X, Y, Z] in camera coordinates 
+    """
+
+    if len(tf.shape(pose)) == 1:
+        pose = tf.expand_dims(pose, axis=0)
+
+    center = pose[..., :2] 
+    Z = tf.expand_dims(pose[:, 2], axis=1)
+
+    W = tf.cast(tf.squeeze(camera['w']), tf.float32)
+    H = tf.cast(tf.squeeze(camera['h']), tf.float32)
+    fx = camera['fx']
+    fy = camera['fy'] 
+
+    WH = tf.stack([W, H]) - 1
+    x, y = tf.split(center * WH, 2, axis = -1)
+
+    X = ((2*x)/(W - 1) - 1)*(Z/fx)
+    Y = (1 - (2*y)/(H - 1))*(Z/fy)
+
+    return tf.concat([X, Y, Z], axis = -1)
+
+def unbatch_dict(batched_dict, nbatch = -1):
+
+    """Unbatches amalgamated dictionaries"""
+  
+    if nbatch == -1:
+        nbatch = list(batched_dict.values())[0].shape[0]
+
+    res = [{k: v[i] for k, v in batched_dict.items()} 
+            for i in range(nbatch)]
+    return res
 # PART C ======================================================================== 
 
 WEATHER_CLASSES = {0:'Blizzard', 

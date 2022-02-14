@@ -10,14 +10,15 @@
 import numpy as np
 
 import tensorflow as tf
-import tensorflow.keras as K 
 import tensorflow.keras.layers as KL    
-   
+  
 from methods._data.targets import add_anchor_ids, divide_grids 
+
+_true = tf.constant(True, tf.bool)
 
 # PART A: ROI Align ================================================================ 
  
-def assign_roi_level(anchor_id, nlevels):
+def assign_roi_level(anchor_id, nlevels, nscales, cfg):
     """Assigns each roi to a feature map level based on its anchor-mask
     assignment
 
@@ -30,7 +31,7 @@ def assign_roi_level(anchor_id, nlevels):
              values [0, 1, 2] | [0, 1]
     """
 
-    return tf.math.ceil(nlevels - anchor_id / nlevels) - 1
+    return tf.math.ceil(nlevels - anchor_id / nscales) - 1
 
 def pyramid_roi_align(rois, fmaps, cfg):
     """Implements ROIAlign Pooling on multiple levels of the yolo feature pyramid
@@ -52,17 +53,18 @@ def pyramid_roi_align(rois, fmaps, cfg):
     anchors = np.array(cfg['ANCHORS'], np.float32)
     masks = cfg['MASKS']
     nlevels = len(masks)
-   
+    nscales = len(masks[0])
+
     # Assign each ROI to a level in the pyramid based on the ROI area. 
     # Account for: normalised bbox co-ordinates  
     # Assume: Square image size
-         
-    anchor_id = add_anchor_ids(rois, anchors, ids_only = True) # [nbatch, maxboxes, 1]
+
+    anchor_id = add_anchor_ids(rois, anchors, ids_only = _true) # [nbatch, maxboxes, 1]
 
     x1, y1, x2, y2 = tf.split(rois, 4, axis=2)
     boxes = tf.concat([y1, x1, y2, x2], axis=-1) # [nbatch, maxboxes, 4] 
 
-    roi_level = assign_roi_level(anchor_id, nlevels) # [nbatch, maxboxes, 1]
+    roi_level = assign_roi_level(anchor_id, nlevels, nscales, cfg) # [nbatch, maxboxes, 1]
     
     # Loop through levels and apply ROI pooling to each. P0 to P2.
         
@@ -73,7 +75,7 @@ def pyramid_roi_align(rois, fmaps, cfg):
 
     for level in range(nlevels):
         
-        eq_ix = tf.squeeze(tf.equal(roi_level, level), axis=-1) # [nbatch, cfg.MAX_GT_INSTANCES]
+        eq_ix = tf.equal(roi_level, level)                      # [nbatch, cfg.MAX_GT_INSTANCES]
         ix = tf.where(eq_ix)                                    # [ndetect_across_nbatch, batch_id + eq_index]
         
         level_boxes = tf.gather_nd(boxes, ix)                   # [ndetect_across_nbatch, 4]
@@ -97,7 +99,7 @@ def pyramid_roi_align(rois, fmaps, cfg):
         # Here we use the simplified approach of a single value per bin,
         # which is how it's done in tf.crop_and_resize()
         # Result: [batch * num_boxes, pool_height, pool_width, channels]           
-
+        
         roi_aligned = tf.image.crop_and_resize(fmaps[level], 
                                                level_boxes, 
                                                box_indices, 
@@ -125,21 +127,19 @@ def pyramid_roi_align(rois, fmaps, cfg):
 
     # Re-add the batch dimension
     shape = tf.concat([tf.shape(boxes)[:2], tf.shape(pooled)[1:]], axis=0)    
-    pooled = tf.reshape(pooled, shape)
-    return pooled
+    return tf.reshape(pooled, shape, name='roi_algn')
 
 # PART B: Supporting functions =================================================================
 
 def TDConv(x, filters, kernel, strides = 1, padding = 'valid'):
     x = KL.TimeDistributed(KL.Conv2D(filters, kernel, strides = strides, padding = padding))(x)
-    x = KL.TimeDistributed(KL.BatchNormalization())(x)
+    x = KL.TimeDistributed(KL.BatchNormalization(axis=-1))(x)
     x = KL.LeakyReLU()(x)    
     return x
 
-
 # PART C: Head module configurations ============================================================
 
-def PoseGraph(mode, cfg, name=None):
+def PoseGraph(inputs, cfg): 
     
     """Builds head pose graph
 
@@ -148,21 +148,16 @@ def PoseGraph(mode, cfg, name=None):
     :result: [nbatch, ndetect, 10]
     """
 
-    MODE = 'DET_' if mode == 'detection' else ''
+    rpn_roi, roi_align = inputs
 
-    rpn_roi, x = input = (KL.Input([cfg[MODE + 'MAX_GT_INSTANCES'], 4]),
-        KL.Input([cfg[MODE + 'MAX_GT_INSTANCES'], cfg['POOL_SIZE'], cfg['POOL_SIZE'], cfg['TOP_DOWN_PYRAMID_SIZE']]))
-
-    x = TDConv(x, cfg['FC_LAYERS_SIZE'], 7)
+    x = TDConv(roi_align, cfg['FC_LAYERS_SIZE'], cfg['POOL_SIZE'])
     x = TDConv(x, cfg['FC_LAYERS_SIZE'], 1) 
     shared = tf.squeeze(x, (2, 3))          # [nbatch, cfg.MAX_GT_INSTANCES, FC_LAYERS_SIZE]
 
     out = KL.TimeDistributed(KL.Dense(10), name='pose_out')(shared)
-    act = OutActivations(out, rpn_roi)     
+    return OutActivations(out, rpn_roi, cfg)     
 
-    return K.Model(input, act, name=name)
-
-def OutActivations(out, rpn_roi):
+def OutActivations(out, rpn_roi, cfg):
 
     """Apply separate activation functions to each pose component 
         center: (0, 1)   --> sigmoid and recenter
@@ -171,20 +166,20 @@ def OutActivations(out, rpn_roi):
         quat:   (-1, 1)  --> tanh
     """
 
-    center, depth, dims, quat = tf.split(out, (2, 1, 3, 4), axis=-1)
+    center, depth, dims, quat = tf.split(out, (2, 1, 3, 4), axis=-1, name='split_out_act')
     
     center = KL.Activation(tf.math.sigmoid)(center)
     center = RecenterPose(rpn_roi, center)
 
-    depth = KL.Lambda(depth_act)(depth)
+    depth = KL.Lambda(lambda x: depth_act(x, cfg['MAX_DEPTH'] - 1))(depth)
     quat = KL.Activation(tf.math.tanh)(quat)
 
-    return tf.concat([center, depth, dims, quat], axis=-1)
+    return tf.concat([center, depth, dims, quat], axis=-1, name='pd_pose')
 
 
-def depth_act(x):
+def depth_act(x, max_depth):
     x = tf.math.sigmoid(x)
-    return 100.0 * ((tf.exp(x) - 1.0) /  (tf.exp(1.0) - 1.0))
+    return 1.0 + max_depth * ((tf.exp(x) - 1.0) /  (tf.exp(1.0) - 1.0))
 
 def RecenterPose(rpn_roi, center):
 
@@ -208,7 +203,7 @@ def RecenterPose(rpn_roi, center):
 
 # PART D: Build DRS head ========================================================================
 
-def ROIAlign(mode, cfg, name=None):
+def ROIAlign(inputs, cfg): 
     
     """Computes regions of interest
 
@@ -218,18 +213,7 @@ def ROIAlign(mode, cfg, name=None):
     :result: [nbatch, ndetect, 7, 7, TOP_DOWN_PYRAMID_SIZE]
     """
     
-    MODE = 'DET_' if mode == 'detection' else ''
-
-    rois = KL.Input([cfg[MODE + 'MAX_GT_INSTANCES'], 4])
-
-    nscale = len(cfg['MASKS'])
-    grid_small = cfg['IMAGE_SIZE'] // 32             # smallest grid size 
-
-    grid_sizes = [grid_small*2**i for i in range(nscale)]
-    out_sizes = [int(128*2**(nscale - 1)*0.5**i) for i in range(nscale)]
-
-    feature_maps = [KL.Input([gsize, gsize, osize]) for gsize, osize in zip(grid_sizes, out_sizes)] 
-
+    rois, feature_maps = inputs
     filters = cfg['TOP_DOWN_PYRAMID_SIZE']
 
     fmaps = []    
@@ -237,9 +221,7 @@ def ROIAlign(mode, cfg, name=None):
         fpn_name = 'fpn_p{:d}'.format(i)
         fmaps.append(KL.Conv2D(filters, (3, 3), padding = 'same', name = fpn_name)(P))
 
-    roi_align = pyramid_roi_align(rois, fmaps, cfg)
-
-    return K.Model([rois, feature_maps], roi_align, name=name)
+    return pyramid_roi_align(rois, fmaps, cfg)
 
 class DetectionTargetsLayer(KL.Layer):
     """Generates bbox, class and pose annotations for rpn generated proposals
@@ -265,7 +247,7 @@ class DetectionTargetsLayer(KL.Layer):
         grid_small = self.cfg.IMAGE_SIZE // 32                                              
         grid_sizes = grid_small*2**tf.range(nlevels)                         
     
-        nbatch = tf.shape(rpn_rois)[0]
+        nbatch = tf.shape(rpn_roi)[0]
         ndetect = self.cfg.MAX_GT_INSTANCES  
 
         anchors = tf.constant(self.cfg.ANCHORS, tf.float32)
@@ -299,73 +281,6 @@ class DetectionTargetsLayer(KL.Layer):
 
         gt_od, gt_pose = tf.split(gt_pose_od, (5, 10))       
         return gt_pose, gt_od
-
-class OutLayer(KL.Layer):
-
-    def __init__(self, name=None):
-        super(OutLayer, self).__init__(name=name)
-
-    def call(self, inputs):
-
-        """Reformats predicted output into annotation-ready form
-
-        :note: output must be tensors (not ragged)
-
-        :param nms: [boxes, scores, classes, nvalid] (padded)
-        :param pd_pose: [nbatch, cfg.MAX_GT_INSTANCES, 10]
-
-        :result: [nbatch, ndetect, boxes (4) + score (1) + class (1) + [RPN]
-                       center (2) + depth (1) + dims (3) + quat (4) [HEAD]]
-        """
-
-        nms, pd_pose = inputs 
-        
-        # RPN
-
-        rpn_roi, scores, classes, nvalids = nms
-
-        scores = tf.expand_dims(scores, axis=-1)
-        classes = tf.expand_dims(classes, axis=-1)
-
-        # HEAD
-
-        return tf.concat([rpn_roi, scores, classes, pd_pose], axis=-1, name='out_padded') # [nbatch, cfg.MAX_GT_INSTANCES, 16]
-
-#def build_drs_head(rois, feature_maps, cfg):
-    """Builds the computation graph of the mask head of Feature Pyramid Network.
-    rois: [batch, num_rois, (y1, x1, y2, x2)] Proposal boxes in normalized
-          coordinates.
-    feature_maps: List of feature maps from different layers of the pyramid,
-                  [P2, P3, P4, P5]. Each has a different resolution.
-    pool_size: The width of the square feature map generated from ROI Pooling.
-    num_classes: number of classes, which determines the depth of the results
-    """
-
-    # Process feature maps
-
- #   filters = cfg.TOP_DOWN_PYRAMID_SIZE
-
- #   fmaps = []
-    
-#    for i, P in enumerate(feature_maps):
-#        fpn_name = 'fpn_p{:d}'.format(i)
-#        fmaps.append(Conv2D(filters, (3, 3), padding = 'same', name = fpn_name)(P))
-
-    # ROI align
-
-#    x = pyramid_roi_align(rois, fmaps, cfg) # [nbatch, ndetect, 7, 7, TOP_DOWN_PYRAMID_SIZE]
-#    print(x)
-
-    # Modules
-    
-#    pose = pose_graph(x, cfg)                # [nbatch, ndetect, nfeatures]    
-#    print(pose) 
-    
-#    if cfg.ADD_HEAD_OD == "separate": 
-#        od = od_graph(x, cfg)           # Add to output [ADJUST]       
-#        print(od) 
-
-#    return pose # Model([rois, feature_maps], out, name=name)
   
  
       

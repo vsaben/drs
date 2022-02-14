@@ -11,7 +11,6 @@
 import os
 import json
 import numpy as np
-import tensorflow as tf
 
 # Adaptation of Mask RCNN repo config file: https://github.com/matterport/Mask_RCNN
 # Glossary:
@@ -28,9 +27,7 @@ class Config(object):
 
     NAME = None
 
-    BEST_VAL_LOSS = None
-
-    TRAIN_SESSIONS = 0
+    BEST_VAL_LOSS = -1.0
 
     """A: Image ================================================================="""
     
@@ -48,7 +45,7 @@ class Config(object):
     #   larger batches enhance error gradient estimations, convergence is slower 
     #   (and vice versa). Limited here by GPU memory constraints.   
 
-    BATCH_SIZE = 32
+    BATCH_SIZE = 10
    
     # Shuffle buffer size. Affects the randomness in order to which instances are 
     #   selected and batched. Let b = buffer size. An instance is drawn from a 
@@ -66,7 +63,7 @@ class Config(object):
     #   permitted via the early stopping keras callback. Total epochs stored for 
     #   to combine tensorboard summaries via a step parameter.   
 
-    EPOCHS = 2
+    EPOCHS = 100
     TOTAL_EPOCHS = 0
 
     # Specifies if an exploratory data analysis is conducted. If true, the analyis 
@@ -81,6 +78,10 @@ class Config(object):
  
     EXPLORE_DATA = False
 
+    # Gradient norm clipping
+    
+    GRADIENT_CLIPNORM = 5.0
+
     # Applies a horizontal flip augmentation to each image. Doubles the effective 
     #    dataset size. 
 
@@ -90,14 +91,14 @@ class Config(object):
     #   TensorFlow it causes weights to explode. Likely due to differences in 
     #   optimizer implementation". Reduced upon plateau using the associated keras 
     #   callback.  
-
+    
     LR_INIT = 1e-3
     LR_END = 1e-6
 
     # Train or freeze batch normalization layers. Poor training implications 
     #   where batch size is small. 
 
-    TRAIN_BN    = False
+    TRAIN_BN    = True
     
     # Loss components and weights. Component weighting focuses model performance. 
     #   All components are provided as metrics. RPN metrics account for all 
@@ -105,9 +106,8 @@ class Config(object):
     #   backbone's number of output layers.
 
     LOSSES = {
-        'rpn_loss':        1., 
+        'rpn_loss':        1.5, 
         'pose_loss':       1.
-        #'mask_loss': 1.
         }
 
     RPN_TYPE_LOSSES = {
@@ -135,10 +135,6 @@ class Config(object):
     # L2 regularisation factor. Applied after model build.
         
     WEIGHT_DECAY = 0.0001
-
-    # Metrics stored in addition to loss components (see above).
-
-    METRICS = {}
 
     # Class weighting accounts for the distribution imbalance of damaged to undamaged 
     #  vehicle instances in the data. Damaged vehicles are less frequent. Class losses 
@@ -174,7 +170,7 @@ class Config(object):
     #   This prevents unnecessary, computationally-expensive coarse feature relearning 
     #   possessed through transfer learning.
 
-    PER_DARKNET_UNFROZEN = 0.2
+    PER_DARKNET_FROZEN = 0.95
 
     # Non-max suppression thresholds to filter RPN proposals. Increase during training 
     #   to generate more valid proposals (if USE_RPN_ROI = True).
@@ -198,7 +194,6 @@ class Config(object):
     # Number of object categorisations. Overwritten during name file parsing.
 
     NUM_CLASSES = 2
-
     CLASSES = ['undamaged', 'damaged']
 
     """D: Head ================================================================="""
@@ -207,12 +202,13 @@ class Config(object):
 
     TOP_DOWN_PYRAMID_SIZE = 256
 
-    # ROI pooling size    
+    # ROI pooling size: Increase to mask size    
 
-    POOL_SIZE = 7
-    #MASK_POOL_SIZE = 14
+    POOL_SIZE = 7 # CHANGE CLUSTER
 
     FC_LAYERS_SIZE = 1024
+
+    MAX_DEPTH = 277.917480
 
     # Defines dimension measurements relative to the training set's median observed 
     #   vehicle dimensions. Recollected in the final layer. Set once per model. 
@@ -233,7 +229,6 @@ class Config(object):
     #       [d] P --> Q
     #       [e] P --> WC --> Q 
 
-
     OPTIMISE_LAYERS = ['']
     OPTIMISE_EPOCHS = 2
 
@@ -253,29 +248,9 @@ class Config(object):
 
     DET_RPN_IOU_THRESHOLD = 0.7
 
-    # Number of training steps per epoch
-    # This doesn't need to match the size of the training set. Tensorboard
-    # updates are saved at the end of each epoch, so setting this to a
-    # smaller number means getting more frequent TensorBoard updates.
-    # Validation stats are also calculated at each epoch end and they
-    # might take a while, so don't set this too small to avoid spending
-    # a lot of time on validation stats.
-    # STEPS_PER_EPOCH = 1000
-
-    # Number of validation steps to run at the end of every training epoch.
-    # A bigger number improves accuracy of validation stats, but slows
-    # down the training.
-    # VALIDATION_STEPS = 50
 
     # Size of the fully-connected layers in the classification graph
     # FPN_CLASSIF_FC_LAYERS_SIZE = 1024
-
-
-    # If enabled, resizes instance masks to a smaller size to reduce
-    # memory load. Recommended when using high-resolution images.
-    #USE_MINI_MASK = True
-    #MINI_MASK_SHAPE = (56, 56)  # (height, width) of the mini-mask
-
 
     # Image mean (RGB)
     # MEAN_PIXEL = np.array([123.7, 116.8, 103.9])
@@ -291,36 +266,9 @@ class Config(object):
     # Note: YOLO trains negative and positive ROIs simultaneouely
     #ROI_POSITIVE_RATIO = 0.33
 
-
-    # Shape of output mask
-    # To change this you also need to change the neural network mask branch
-    #MASK_SHAPE = [28, 28]
-
     # Bounding box refinement standard deviation for RPN and final detections.
     #RPN_BBOX_STD_DEV = np.array([0.1, 0.1, 0.2, 0.2])
     #BBOX_STD_DEV = np.array([0.1, 0.1, 0.2, 0.2])
-
-
-
-    # Gradient norm clipping
-    #GRADIENT_CLIP_NORM = 5.0
-
-    def save(self):
-        
-        """Save configuration attributes (excl. YOLO) to .json file
-        
-        :param ckpt_dir: general model saving directory
-        :param name: model/test name
-        
-        :result: configuration attributes stored in config.json
-        """
-
-        if not os.path.isdir(self.MODEL_DIR): 
-            os.mkdir(self.MODEL_DIR)
-
-        file_name = os.path.join(self.MODEL_DIR, "config.json")        
-        with open(file_name, 'w') as f:
-            json.dump(self.to_dict(), f, sort_keys=True, indent=4)  
             
     def restore(model_dir):
         file_name = os.path.join(model_dir, "config.json")
@@ -349,7 +297,7 @@ class Config(object):
     def to_dict(self):
         return {attr: getattr(self, attr) for attr in dir(self) if attr.isupper()}
 
-def UpdateConfigYolo(cfg, data_path):               
+def UpdateConfigYolo(cfg, data_path, weights_file = None):               
     
     """Update configuration with yolo (anchors, masks, default weight directory) 
     and data attributes (ntrain, nval, ninfer)
@@ -362,13 +310,16 @@ def UpdateConfigYolo(cfg, data_path):
 
     setattrs(cfg, ANCHORS = yolo.ANCHORS, 
                   MASKS = yolo.MASKS, 
-                  DEFAULT_YOLO_WEIGHT_PATH = yolo.DEFAULT_YOLO_WEIGHT_PATH)          
+                  DEFAULT_YOLO_WEIGHT_PATH = yolo.DEFAULT_YOLO_WEIGHT_PATH if (weights_file is None) else weights_file, 
+                  STRIDES = yolo.STRIDES,
+                  XYSCALE = yolo.XYSCALE,
+                  LAYER_SIZE = yolo.LAYER_SIZE,
+                  OUTPUT_POS = yolo.OUTPUT_POS)          
 
 class Yolo:
-    MASKS     = [[6, 7, 8], [3, 4, 5], [0, 1, 2]]             # Sequential layers (3) are responsible for predicting masks of decreasing size 
-    
-    ANCHORS_9 = [np.array([(10, 11),(16, 40),(18, 20),(25, 55),(29, 31),(37, 83),(42, 48),(61, 85),(87, 144)], np.float32) / 416][0].tolist()
-    ANCHORS_6 = [np.array([(11, 11),(19, 25),(21, 52),(33, 38),(43, 70),(76, 122)], np.float32) / 416][0].tolist()
+         
+    ANCHORS_9 = [np.array([(10,11),(18,20),(16,41),(29,31),(25,56),(42,48),(38,83),(63,85),(87,147)], np.float32) / 416][0].tolist()
+    ANCHORS_6 = [np.array([(11,11),(19,25),(21,52),(33,37),(43,69),(76,121)], np.float32) / 416][0].tolist()
 
     def __init__(self, cfg, default_ckpt_dir):
         model = self.get_base_model(cfg.BACKBONE)
@@ -379,8 +330,13 @@ class Yolo:
         if not cfg.USE_DEFAULT_ANCHORS: 
             self.ANCHORS = Yolo.ANCHORS_6 if istiny else Yolo.ANCHORS_9
 
-        self.MASKS = Yolo.MASKS[1:] if istiny else Yolo.MASKS 
         self.DEFAULT_YOLO_WEIGHT_PATH = os.path.join(default_ckpt_dir, "{:s}.weights".format(cfg.BACKBONE.lower()))
+        
+        self.MASKS = model.MASKS
+        self.STRIDES = model.STRIDES
+        self.XYSCALE = model.XYSCALE
+        self.LAYER_SIZE = model.LAYER_SIZE
+        self.OUTPUT_POS = model.OUTPUT_POS
 
     def get_base_model(self, backbone):
 
@@ -397,21 +353,36 @@ class Yolo:
         if backbone == "YoloV4T": return Yolo.V4T
 
     class V3:
-        ANCHORS   = [np.array([(10,13),(16,30),(33,23),(30,61),(62,45),(59,119),(116,90),(156,198),(373,326)], np.float32) / 416][0].tolist() # Anchors specified relative to W = H as a proportion [0 - 1]             
-        STRIDES   = [8, 16, 32]
-        XYSCALE   = [1.2, 1.1, 1.05]
+        ANCHORS    = [np.array([(10,13),(16,30),(33,23),(30,61),(62,45),(59,119),(116,90),(156,198),(373,326)], np.float32) / 416][0].tolist() # Anchors specified relative to W = H as a proportion [0 - 1]             
+        STRIDES    = [8, 16, 32]
+        XYSCALE    = [1, 1, 1]
+        LAYER_SIZE = 75
+        OUTPUT_POS = [58, 66, 74]
+        MASKS      = [[6, 7, 8], [3, 4, 5], [0, 1, 2]] 
             
     class V3T:
-        ANCHORS   = [np.array([(10,14),(23,27),(37,58),(81,82),(135,169),(344,319)], np.float32) / 416][0].tolist()     
-        STRIDES   = [16, 32]
-        XYSCALE   = [1.05, 1.05]
+        ANCHORS    = [np.array([(10,14),(23,27),(37,58),(81,82),(135,169),(344,319)], np.float32) / 416][0].tolist()     
+        STRIDES    = [16, 32]
+        XYSCALE    = [1, 1]
+        LAYER_SIZE = 13
+        OUTPUT_POS = [9, 12]
+        MASKS      = [[3, 4, 5], [0, 1, 2]]
 
     class V4:
-        ANCHORS   = [np.array([(12,16),(19,36),(40,28),(36,75),(76,55),(72,146),(142,110),(192,243),(459,401)], np.float32) / 608][0].tolist()
+        ANCHORS    = [np.array([(12,16),(19,36),(40,28),(36,75),(76,55),(72,146),(142,110),(192,243),(459,401)], np.float32) / 608][0].tolist()
+        STRIDES    = [8, 16, 32]
+        XYSCALE    = [1.2, 1.1, 1.05]
+        LAYER_SIZE = 110
+        OUTPUT_POS = [93, 101, 109]
+        MASKS      = [[0, 1, 2], [3, 4, 5], [6, 7, 8]]
 
     class V4T:
-        ANCHORS   = [np.array([(10,14),(23,27),(37,58),(81,82),(135,169),(344,319)], np.float32) / 416][0].tolist()
-
+        ANCHORS    = [np.array([(10,14),(23,27),(37,58),(81,82),(135,169),(344,319)], np.float32) / 416][0].tolist()
+        STRIDES    = [16, 32]
+        XYSCALE    = [1.05, 1.05]
+        LAYER_SIZE = 21
+        OUTPUT_POS = [17, 20]
+        MASKS      = [[3, 4, 5], [1, 2, 3]]
     
 def setattrs(_self, **kwargs):
     for k, v in kwargs.items():

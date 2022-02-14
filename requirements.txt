@@ -2,3 +2,6 @@ tensorflow==2.2
 matplotlib==3.0.2
 opencv-python
 tensorflow-model-optimization
+sklearn
+Pillow
+shapely

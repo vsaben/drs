@@ -19,7 +19,6 @@ pi = tf.constant(math.pi)
 
 from methods._data.reformat import (
     get_bb2d, 
-    get_rel_yaw,
     get_screen_center, 
     get_vehicle_classes, 
     get_weather_classes, 
@@ -107,9 +106,12 @@ def extract_environment(ex):
                              tf.cast(ex['env_snow'], tf.int32)])    
     return environment
 
-def extract_cpos(ex, camera):
+def extract_cpos(ex):
 
-    """Extract vehicle pose information."""
+    """Extract vehicle pose information. 
+    
+    note: relative yaw
+    """
 
     cpos = tf.stack([tf.sparse.to_dense(ex['pos_x']), 
                      tf.sparse.to_dense(ex['pos_y']), 
@@ -176,7 +178,7 @@ def parse_model_tfrecord(tfrecord, image_size):
     N = tf.shape(ex['pos_x'])[0]
 
     def true_fn():
-        cpos = extract_cpos(ex, camera) # Row-wise: [pos_x, pos_y, pos_z, dim_x, dim_y, dim_z, rot_x, rot_y, rot_z]
+        cpos = extract_cpos(ex)         # Row-wise: [pos_x, pos_y, pos_z, dim_x, dim_y, dim_z, rot_x, rot_y, rot_z]
         features = extract_features(ex) # Row-wise: [dam, occ, tru, cls]
         return cpos, features
 
@@ -284,17 +286,22 @@ def transform_prebatch(x, cpos, features, camera, environment, cfg):
     padded_features = tf.pad(input_features, paddings)
     padded_pose = tf.pad(input_pose, paddings)
     padded_rpn = tf.pad(input_rpn, paddings)
-    
-    inputs = {'camera': camera,
-              'environment': environment,
+
+    inputs = {'camera_rot': camera['rot'],
+              'camera_R': camera['R'],
+              'camera_w': camera['w'],
+              'camera_h': camera['h'],
+              'camera_fx': camera['fx'],
+              'camera_fy': camera['fy'],
+
+              'input_environment': environment,
               'input_features': tf.ensure_shape(padded_features, (cfg.MAX_GT_INSTANCES, 3)),
               'input_image': x,              
               'input_pose': tf.ensure_shape(padded_pose, (cfg.MAX_GT_INSTANCES, 10)), 
               'input_rpn': tf.ensure_shape(padded_rpn, (cfg.MAX_GT_INSTANCES, 5))}            # seems alphabetical
 
-    outputs = tf.constant(0)     
-
-    return inputs, outputs
+    outputs = tf.constant(0)   
+    return (inputs, outputs)
 
 def load_ds(data_path, set, cfg):
 

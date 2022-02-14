@@ -9,11 +9,11 @@
     - PART F: Freeze darknet layers
 """
 
-import numpy as np
-
 import tensorflow as tf
 import tensorflow.keras as K 
 import tensorflow.keras.layers as KL 
+
+from methods.utils import CenterToMinMax, GridToImg
 
 # PART A: Individual layers and blocks ================================================
 
@@ -25,15 +25,38 @@ def DarknetConv(x, filters, kernel, strides=1, batch_norm=True, activate_type = 
         padding = 'valid'
     x = KL.Conv2D(filters=filters, kernel_size=kernel,
                   strides=strides, padding=padding,
-                  use_bias=not batch_norm)(x)             # , kernel_regularizer=l2(0.0005) [ADJUST]
+                  use_bias=not batch_norm)(x)             
     if batch_norm:
-        x = KL.BatchNormalization()(x)
+        x = KL.BatchNormalization()(x) 
         if activate_type == 'leaky': x = KL.LeakyReLU(alpha=0.1)(x)
         if activate_type == 'mish': x = mish(x)
     return x
 
 def mish(x):
     return KL.Lambda(lambda x: x * tf.math.tanh(tf.math.softplus(x)))(x)
+
+class BatchNorm(KL.Layer):
+    """Extends the Keras BatchNormalization class to allow a central place
+    to make changes if needed.
+
+    Batch normalization has a negative effect on training if batches are small
+    so this layer is often frozen (via setting in Config class) and functions
+    as linear layer.
+    """
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.bn = KL.BatchNormalization(momentum=0.9)
+
+    def call(self, x, training=None):
+        """
+        Note about training values:
+            None: Train BN layers. This is the normal mode
+            False: Freeze BN layers. Good when batch size is small
+            True: (don't use). Set layer in training mode even when making inferences
+        """
+
+        return self.bn(x) #super(self.__class__, self).call(inputs, training=training)
 
 def DarknetResidual(x, filters, activate_type = 'leaky'): 
     prev = x
@@ -87,21 +110,21 @@ def route_group(input_layer, groups, group_id):
 def CSPMaxPool(kernel):
     return KL.Lambda(lambda x: tf.nn.max_pool(x, kernel, strides=1, padding='SAME'))
 
+
+
 # PART B: Darknet =====================================================================
 
-def Darknet(cfg, name=None):
-    input_image = KL.Input((cfg['IMAGE_SIZE'], cfg['IMAGE_SIZE'], cfg['CHANNELS']))
-    x = DarknetConv(input_image, 32, 3)
+def Darknet(x, name=None):
+    x = DarknetConv(x, 32, 3)
     x = DarknetBlock(x, 64, 1)
     x = DarknetBlock(x, 128, 2)  
     x = x_36 = DarknetBlock(x, 256, 8)  
     x = x_61 = DarknetBlock(x, 512, 8)
     x = DarknetBlock(x, 1024, 4)
-    return K.Model(input_image, (x_36, x_61, x), name=name)
+    return x_36, x_61, x 
 
-def CSPDarknet(cfg, name=None):
-    input_image = KL.Input((cfg['IMAGE_SIZE'], cfg['IMAGE_SIZE'], cfg['CHANNELS']))
-    x = DarknetConv(input_image, 32, 3, activate_type = 'mish')
+def CSPDarknet(x, name=None):
+    x = DarknetConv(x, 32, 3, activate_type = 'mish')
     x = DarknetConv(x, 64, 3, 2, activate_type = 'mish')    
     x = CSPDarknetBlock(x, 64, 1, residual_type = 'yolo3')
     x = DarknetConv(x, 64, 1, activate_type = 'mish')
@@ -126,11 +149,10 @@ def CSPDarknet(cfg, name=None):
     x = DarknetConv(x, 512, 1)
     x = DarknetConv(x, 1024, 3)
     x = DarknetConv(x, 512, 1)
-    return K.Model(input_image, (x_1, x_2, x), name=name)
+    return x_1, x_2, x
 
-def DarknetTiny(cfg, name=None):
-    input_image = KL.Input((cfg['IMAGE_SIZE'], cfg['IMAGE_SIZE'], cfg['CHANNELS']))
-    x = DarknetConv(input_image, 16, 3)
+def DarknetTiny(x, name=None):
+    x = DarknetConv(x, 16, 3)
     x = KL.MaxPool2D(2, 2, 'same')(x)
     x = DarknetConv(x, 32, 3)
     x = KL.MaxPool2D(2, 2, 'same')(x)
@@ -143,71 +165,62 @@ def DarknetTiny(cfg, name=None):
     x = DarknetConv(x, 512, 3)
     x = KL.MaxPool2D(2, 1, 'same')(x)
     x = DarknetConv(x, 1024, 3)
-    return K.Model(input_image, (x_8, x), name=name)
+    return x_8, x
 
-def CSPDarknetTiny(cfg, name=None):
-    input_image = KL.Input((cfg['IMAGE_SIZE'], cfg['IMAGE_SIZE'], cfg['CHANNELS']))
-    x = DarknetConv(input_image, 32, 3, 2)
+def CSPDarknetTiny(x, name=None):
+    x = DarknetConv(x, 32, 3, 2)
     x = DarknetConv(x, 64, 3, 2)
     x = DarknetConv(x, 64, 3)
     x = CSPDarknetBlockTiny(x, 32)
     x = CSPDarknetBlockTiny(x, 64)
     x, rt1 = CSPDarknetBlockTiny(x, 128, return_rt_last = True)
-    return K.Model(input_image, (rt1, x), name=name)
+    return rt1, x
 
 # PART C: Yolo head supporting functions ==================================================
 
-def YoloConv(filters, iscsp=False, name=None): 
-    def yolo_conv(x_in):
-        if isinstance(x_in, tuple):
-            x, x_skip = inputs = KL.Input(x_in[0].shape[1:]), KL.Input(x_in[1].shape[1:])                        
-            x = DarknetConv(x, filters, 1)
-            if iscsp: x_skip = DarknetConv(x_skip, filters, 1)
-            x = KL.UpSampling2D(2)(x)
-            x = KL.Concatenate()([x, x_skip])
-        else:
-            x = inputs = KL.Input(x_in.shape[1:])                         
-
+def YoloConv(x_in, filters, iscsp=False, name=None): 
+    if isinstance(x_in, tuple):
+        x, x_skip = x_in                       
         x = DarknetConv(x, filters, 1)
-        x = DarknetConv(x, filters * 2, 3)
+        if iscsp: x_skip = DarknetConv(x_skip, filters, 1)
+        x = KL.UpSampling2D(2)(x)
+        x = KL.Concatenate()([x, x_skip])
+    else:
+        x = x_in                       
+
+    x = DarknetConv(x, filters, 1)
+    x = DarknetConv(x, filters * 2, 3)
+    x = DarknetConv(x, filters, 1)
+    x = DarknetConv(x, filters * 2, 3)
+    x = DarknetConv(x, filters, 1)
+
+    return x
+
+def CSPYoloConv(x_in, filters, name=None): 
+    x, rt = x_in
+    x = DarknetConv(x, filters, 3, 2)
+    x = KL.Concatenate()([x, rt])
+    x = YoloConv(x, filters)
+    return x
+
+def YoloConvTiny(x_in, filters, name=None): 
+    if isinstance(x_in, tuple):
+        x, x_skip = x_in
         x = DarknetConv(x, filters, 1)
-        x = DarknetConv(x, filters * 2, 3)
+        x = KL.UpSampling2D(2)(x)
+        x = KL.Concatenate()([x, x_skip])
+    else:
+        x = x_in 
         x = DarknetConv(x, filters, 1)
-        return K.Model(inputs, x, name=name)(x_in)
-    return yolo_conv
+    return x
 
-def CSPYoloConv(filters, name=None):
-    def csp_yolo_conv(x_in):    
-        x, rt = inputs = KL.Input(x_in[0].shape[1:]), KL.Input(x_in[1].shape[1:])
-        x = DarknetConv(x, filters, 3, 2)
-        x = KL.Concatenate()([x, rt])
-        x = YoloConv(x, filters)
-        return K.Model(inputs, x, name=None)(x_in)
-    return csp_yolo_conv
+def YoloOutput(x, filters, nanchors, classes = 2, name=None):   
+    x = DarknetConv(x, filters * 2, 3)
+    x = DarknetConv(x, nanchors * (classes + 5), 1, batch_norm=False)
+    x = KL.Lambda(lambda x: tf.reshape(x, (-1, tf.shape(x)[1], tf.shape(x)[2], nanchors, classes + 5)))(x)
+    return x
 
-def YoloConvTiny(filters, name=None): 
-    def yolo_conv_tiny(x_in):
-        if isinstance(x_in, tuple):
-            x, x_skip = inputs = KL.Input(x_in[0].shape[1:]), KL.Input(x_in[1].shape[1:])
-            x = DarknetConv(x, filters, 1)
-            x = KL.UpSampling2D(2)(x)
-            x = KL.Concatenate()([x, x_skip])
-        else:
-            x = inputs = KL.Input(x_in.shape[1:])
-            x = DarknetConv(x, filters, 1)
-        return K.Model(inputs, x, name=name)(x_in)
-    return yolo_conv_tiny
-
-def YoloOutput(filters, anchors, classes = 2, name=None):    
-    def yolo_output(x_in):
-        x = inputs = KL.Input(x_in.shape[1:])
-        x = DarknetConv(x, filters * 2, 3)
-        x = DarknetConv(x, anchors * (classes + 5), 1, batch_norm=False)
-        x = KL.Lambda(lambda x: tf.reshape(x, (-1, tf.shape(x)[1], tf.shape(x)[2], anchors, classes + 5)))(x)
-        return K.Model(inputs, x, name=name)(x_in)
-    return yolo_output
-
-def Boxes(pred, anchors, classes = 2):
+def Boxes(conv_output, anchors_i, xyscale_i, classes = 2):
 
     """Extract bounding boxes, objectness scores and class probabilities from 
     yolo predictions
@@ -218,121 +231,115 @@ def Boxes(pred, anchors, classes = 2):
     :param classes: number of class predictions (refer note)
 
     :result bbox_xyxy: [nbatch, grid, grid, 3, 4] (normalised)
-    :result objectness: [nbatch, grid, grid, 3, 1]
+    :result obj: [nbatch, grid, grid, 3, 1]
     :result class_probs: [nbatch, grid, grid, 3, nclass]
     :result pred_box_xywh: [nbatch, grid, grid, 3, 4] (original)
     """
-    
-    box_xy, box_wh, objectness, class_probs = tf.split(pred, (2, 2, 1, classes), axis=-1) 
 
-    # Final layer output transformations
+    output_size = tf.shape(conv_output)[1]
+    conv_raw_dxdy, conv_raw_dwdh, conv_raw_obj, conv_raw_class = tf.split(conv_output, (2, 2, 1, classes), axis=-1) 
 
-    box_xy = tf.sigmoid(box_xy)
-    objectness = tf.sigmoid(objectness)
-    class_probs = tf.sigmoid(class_probs)
-    pred_box_xywh = tf.concat((box_xy, box_wh), axis=-1)                      
+    xy_grid = tf.meshgrid(tf.range(output_size), tf.range(output_size))
+    xy_grid = tf.expand_dims(tf.stack(xy_grid, axis=-1), axis=2) 
+    xy_grid = tf.cast(xy_grid, tf.float32)
 
-    # Recollect normalised bbox (x1, y1), (x2, y2) co-ordinates 
-   
-    grid_size = tf.shape(pred)[1:3]
-    grid = tf.meshgrid(tf.range(grid_size[1]), tf.range(grid_size[0]))   # grid[x][y] == (y, x)
-    grid = tf.expand_dims(tf.stack(grid, axis=-1), axis=2)               # [gx, gy, 1, 2]
+    conv_xy = tf.sigmoid(conv_raw_dxdy)
+    pred_box = tf.concat([conv_xy, conv_raw_dwdh], axis=-1) # for loss
 
-    box_xy = (box_xy + tf.cast(grid, tf.float32)) / tf.cast(grid_size, tf.float32)
-    box_wh = tf.exp(box_wh) * anchors
+    pred_xy = ((conv_xy * xyscale_i) - 0.5 * (xyscale_i - 1) + xy_grid) / tf.cast(output_size, tf.float32)
+    pred_wh = tf.exp(conv_raw_dwdh) * anchors_i 
 
-    box_x1y1 = box_xy - box_wh / 2
-    box_x2y2 = box_xy + box_wh / 2
-    bbox_xyxy = tf.concat([box_x1y1, box_x2y2], axis=-1)
+    pred_x1y1 = pred_xy - pred_wh / 2
+    pred_x2y2 = pred_xy + pred_wh / 2
+    pred_bbox = tf.concat([pred_x1y1, pred_x2y2], axis=-1)
 
-    return bbox_xyxy, objectness, class_probs, pred_box_xywh
+    pred_obj = tf.sigmoid(conv_raw_obj)
+    pred_class = tf.sigmoid(conv_raw_class)  
+
+    return pred_bbox, pred_obj, pred_class, pred_box
 
 # PART D: Yolo =========================================================================
 
-def YoloV3(cfg):
+def YoloV3(x, cfg):
 
     masks = cfg['MASKS']
     classes = cfg['NUM_CLASSES']
-    
-    input_image = KL.Input((cfg['IMAGE_SIZE'], cfg['IMAGE_SIZE'], cfg['CHANNELS']))
-    x_36, x_61, x = Darknet(cfg, name='darknet')(input_image)
 
-    x = P0 = YoloConv(512, name='yolo_conv_0')(x)
-    out_0  = YoloOutput(512, len(masks[0]), classes, name='yolo_out_0')(x)
+    x_36, x_61, x = Darknet(x, name = 'darknet')
 
-    x = P1 = YoloConv(256, name='yolo_conv_1')((x, x_61))
-    out_1  = YoloOutput(256, len(masks[1]), classes, name='yolo_out_1')(x)
+    x = P0 = YoloConv(x, 512, name='yolo_conv_0')
+    out_0  = YoloOutput(x, 512, len(masks[0]), classes, name='yolo_out_0') # LARGE/COARSE GRIDS [13]
 
-    x = P2 = YoloConv(128, name='yolo_conv_2')((x, x_36))
-    out_2  = YoloOutput(128, len(masks[2]), classes, name='yolo_out_2')(x)
+    x = P1 = YoloConv((x, x_61), 256, name='yolo_conv_1')
+    out_1  = YoloOutput(x, 256, len(masks[1]), classes, name='yolo_out_1') # MEDIUM GRIDS [26]
+
+    x = P2 = YoloConv((x, x_36), 128, name='yolo_conv_2') 
+    out_2  = YoloOutput(x, 128, len(masks[2]), classes, name='yolo_out_2') # SMALL/FINE GRIDS [52]
 
     fmaps  = (P0, P1, P2)
     outs   = (out_0, out_1, out_2) 
-
-    return K.Model(input_image, (fmaps, outs), name='yolo')       
+   
+    return fmaps, outs  
     
-def YoloV3T(cfg):
+def YoloV3T(x, cfg):
 
     masks = cfg['MASKS']
     classes = cfg['NUM_CLASSES']
     
-    input_image = KL.Input((cfg['IMAGE_SIZE'], cfg['IMAGE_SIZE'], cfg['CHANNELS']))
-    x_8, x = DarknetTiny(name='darknet')(input_image)
+    x_8, x = DarknetTiny(x, name='darknet')
 
-    x = P0 = YoloConvTiny(256, name='yolo_conv_0')(x)
-    out_0  = YoloOutput(256, len(masks[0]), classes, name='yolo_out_0')(x)
+    x = P0 = YoloConvTiny(x, 256, name='yolo_conv_0')
+    out_0  = YoloOutput(x, 256, len(masks[0]), classes, name='yolo_out_0') # LARGE/COARSE GRIDS [13]
 
-    x = P1 = YoloConvTiny(128, name='yolo_conv_1')((x, x_8))
-    out_1  = YoloOutput(128, len(masks[1]), classes, name='yolo_out_1')(x)
+    x = P1 = YoloConvTiny((x, x_8), 128, name='yolo_conv_1')
+    out_1  = YoloOutput(x, 128, len(masks[1]), classes, name='yolo_out_1') # MEDIUM GRIDS [26]
 
     fmaps = (P0, P1)
     outs  = (out_0, out_1)
 
-    return K.Model(input_image, (fmaps, outs), name = 'yolo')
+    return fmaps, outs
 
-def YoloV4(cfg):
+def YoloV4(x, cfg):
     
     masks = cfg['MASKS']
     classes = cfg['NUM_CLASSES']
     
-    input_image = KL.Input((cfg['IMAGE_SIZE'], cfg['IMAGE_SIZE'], cfg['CHANNELS']))
-    rt1, rt2, rt0 = CSPDarknet(name='yolo_darknet')(input_image)
+    rt1, rt2, rt0 = CSPDarknet(x, name='darknet')
 
     x = rt0
-    x = rt2 = YoloConv(256, name='yolo_conv_00', iscsp = True)((x, rt2))
+    x = rt2 = YoloConv((x, rt2), 256, name='yolo_conv_00', iscsp = True)
 
-    x = P2 = YoloConv(128, name='yolo_conv_0', iscsp = True)((x, rt1))    
-    out_2 = YoloOutput(128, len(masks[2]), classes, name='yolo_out_2')(x)
+    x = P2 = YoloConv((x, rt1), 128, name='yolo_conv_2', iscsp = True)  
+    out_2 = YoloOutput(x, 128, len(masks[2]), classes, name='yolo_out_2') # SMALL/FINE GRIDS [52]
     
-    x = P1 = CSPYoloConv(256, name='yolo_conv_1')((x, rt2))
-    out_1 = YoloOutput(256, len(masks[1]), classes, name='yolo_out_1')(x)
+    x = P1 = CSPYoloConv((x, rt2), 256, name='yolo_conv_1')
+    out_1 = YoloOutput(x, 256, len(masks[1]), classes, name='yolo_out_1') # MEDIUM GRIDS [26]
 
-    x = P0 = CSPYoloConv(512, name = 'yolo_conv_0')((x, rt0))
-    out_0 = YoloOutput(512, len(masks[0]), classes, name='yolo_out_0')(x)
+    x = P0 = CSPYoloConv((x, rt0), 512, name = 'yolo_conv_0')
+    out_0 = YoloOutput(x, 512, len(masks[0]), classes, name='yolo_out_0') # LARGE/COARSE GRIDS [13]
 
     fmaps = (P0, P1, P2)
     outs = (out_0, out_1, out_2)
 
-    return K.Model(input_image, (fmaps, outs), name='yolo')
+    return fmaps, outs
 
-def YoloV4T(cfg):
+def YoloV4T(x, cfg):
 
     masks = cfg['MASKS']
     classes = cfg['NUM_CLASSES']
     
-    input_image = KL.Input((cfg['IMAGE_SIZE'], cfg['IMAGE_SIZE'], cfg['CHANNELS']))            
-    rt1, x = CSPDarknetTiny(name='darknet')(input_image)
+    rt1, x = CSPDarknetTiny(x, name='darknet')
 
-    x = P0 = YoloConvTiny(256, name='yolo_conv_0')(x)
-    out_0 = YoloOutput(256, len(masks[0]), classes, name='yolo_out_0')(x)
+    x = P0 = YoloConvTiny(x, 256, name='yolo_conv_0')
+    out_0 = YoloOutput(x, 256, len(masks[0]), classes, name='yolo_out_0')
   
-    x = P1 = YoloConvTiny(128, name='yolo_conv_1')((x, rt1))
-    out_1 = YoloOutput(128, len(masks[1]), classes, name='yolo_out_1')(x)
+    x = P1 = YoloConvTiny((x, rt1), 128, name='yolo_conv_1')
+    out_1 = YoloOutput(x, 128, len(masks[1]), classes, name='yolo_out_1')
 
     fmaps = (P0, P1)
     outs = (out_0, out_1)       
 
-    return K.Model(input_image, (fmaps, outs), name='yolo')
+    return fmaps, outs
 
 class YoloBox(KL.Layer):
 
@@ -340,12 +347,19 @@ class YoloBox(KL.Layer):
         super(YoloBox, self).__init__(name=name, *args, **kwargs)
         self.cfg = cfg
         
-        self.anchors = np.array(cfg['ANCHORS'], np.float32)
+        self.anchors = tf.constant(cfg['ANCHORS'], tf.float32)
         self.nlevels = len(cfg['MASKS'])
+        self.xyscale = tf.constant(cfg['XYSCALE'], tf.float32)
 
-    def call(self, outs):             
-        boxes = [Boxes(outs[i], self.anchors[self.cfg['MASKS'][i]], self.cfg['NUM_CLASSES']) 
-                 for i in range(self.nlevels)]
+    def call(self, outs): 
+        
+        boxes = []
+        for i in range(self.nlevels):
+            anchors_i = tf.gather(self.anchors, self.cfg['MASKS'][i])
+            xyscale_i = self.xyscale[i]
+            box = Boxes(outs[i], anchors_i, xyscale_i, self.cfg['NUM_CLASSES']) 
+            boxes.append(box)
+
         return boxes
 
     def get_config(self):
@@ -370,17 +384,42 @@ class YoloNMS(KL.Layer):
 
         :note: zero padding after nvalid
         """
-    
-        nms_boxes = [box[:3] for box in inputs]
 
-        # Combine and reshape bbox (bbox), objectness / confidence (conf) and class probablities / type (clsp)
-        # ADJUST: Concat / rpn_roi
-
-        bbox = tf.concat([tf.reshape(o[0], (tf.shape(o[0])[0], -1, tf.shape(o[0])[-1])) for o in nms_boxes], axis=1)
-        conf = tf.concat([tf.reshape(o[1], (tf.shape(o[1])[0], -1, tf.shape(o[1])[-1])) for o in nms_boxes], axis=1)
-        clsp = tf.concat([tf.reshape(o[2], (tf.shape(o[2])[0], -1, tf.shape(o[2])[-1])) for o in nms_boxes], axis=1)
+        # Combine and reshape bbox (bbox), objectness / confidence (conf) and class probablities / type (clsp) across grids
+        
+        bbox = tf.concat([tf.reshape(o[0], (tf.shape(o[0])[0], -1, 4)) for o in inputs], axis=1)
+        conf = tf.concat([tf.reshape(o[1], (tf.shape(o[1])[0], -1, 1)) for o in inputs], axis=1)
+        clsp = tf.concat([tf.reshape(o[2], (tf.shape(o[2])[0], -1, self.cfg['NUM_CLASSES'])) for o in inputs], axis=1)
 
         scores = conf * clsp
+        bbox = tf.reshape(bbox, (tf.shape(bbox)[0], -1, 1, 4))
+
+        #dscores = tf.squeeze(scores, axis=0)
+        #scores = tf.reduce_max(dscores,[1])
+        #bbox = tf.reshape(bbox, (-1, 4))     # tf.reshape(bbox, (tf.shape(bbox)[0], -1, 1, 4))
+        #classes = tf.argmax(dscores, 1)
+
+        #selected_indices, selected_scores = tf.image.non_max_suppression_with_scores(
+        #    boxes=bbox,
+        #    scores=scores,
+        #    max_output_size=self.cfg[MODE + 'MAX_GT_INSTANCES'],
+        #    iou_threshold=self.cfg[MODE + 'RPN_IOU_THRESHOLD'],
+        #    score_threshold=self.cfg[MODE + 'RPN_SCORE_THRESHOLD'],
+        #    soft_nms_sigma=0.5)
+    
+        #num_valid_nms_boxes = tf.shape(selected_indices)[0]
+
+        #selected_indices = tf.concat([selected_indices,
+        #                              tf.zeros(self.cfg[MODE + 'MAX_GT_INSTANCES']-num_valid_nms_boxes, tf.int32)], 0)
+
+        #selected_scores = tf.concat([selected_scores,
+        #                              tf.zeros(self.cfg[MODE + 'MAX_GT_INSTANCES']-num_valid_nms_boxes, tf.float32)], -1)
+
+        #boxes = tf.gather(bbox, selected_indices)
+    
+        #scores = tf.expand_dims(selected_scores, axis=-1)
+        #classes = tf.cast(tf.gather(classes, selected_indices), tf.float32)
+        #classes = tf.expand_dims(classes, axis=-1) 
 
         MODE = 'DET_' if self.mode == 'detection' else ''
 
@@ -395,10 +434,13 @@ class YoloNMS(KL.Layer):
 
         # [y1, x1, y2, x2] --> [x1, y1, x2, y2]
 
-        y1, x1, y2, x2 = tf.split(boxes, 4, axis=2)
+        y1, x1, y2, x2 = tf.split(boxes, 4, axis=-1)
         rpn_roi = tf.concat([x1, y1, x2, y2], axis=-1)
 
-        return rpn_roi, scores, classes, nvalid
+        scores = tf.expand_dims(scores, axis=-1)
+        classes = tf.expand_dims(classes, axis=-1)
+
+        return tf.concat([rpn_roi, scores, classes], axis=-1)
 
     def get_config(self):
         config = super(YoloNMS, self).get_config()
@@ -408,12 +450,12 @@ class YoloNMS(KL.Layer):
 
 # PART E: Build yolo graph ============================================================================
 
-def YoloGraph(input_image, mode, cfg):
-    yolo_graph = eval(cfg['BACKBONE']) 
-    rpn_fmaps, outs = yolo_graph(cfg)(input_image)
+def RpnGraph(input_image, mode, cfg):
+    YoloGraph = eval(cfg['BACKBONE']) 
+    rpn_fmaps, outs = YoloGraph(input_image, cfg) 
     pd_boxes = YoloBox(cfg, name = 'yolo_box')(outs)
-    nms = YoloNMS(mode, cfg, name = 'yolo_nms')(pd_boxes)    
-    return rpn_fmaps, pd_boxes, nms
+    pd_rpn = YoloNMS(mode, cfg, name = 'yolo_nms')(pd_boxes)    
+    return rpn_fmaps, pd_boxes, pd_rpn
   
                 
         
