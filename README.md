@@ -4,5 +4,8 @@ Aerial vehicle and vehicle damage (VAVD) underly the operation of a novel drone-
 
 Assets are divided by:
 1. [Simulation](gta/)
-2. [Annotation Processing](annotation/)
-3. [Model Training and Validation](model/)
+2. [Annotation Processing](annotations/)
+3. [Model Training and Validation](ml/)
+
+A sample, simulated, annotated wide-view UVA scenario is shown below:
+![plot](annotations/sample/000648W00RD_annotated.jpeg)
