@@ -8,4 +8,5 @@ Assets are divided by:
 3. [Model Training and Validation](ml/)
 
 A sample, simulated, annotated wide-view UVA scenario is shown below:
+
 ![plot](annotations/sample/000648W00RD_annotated.jpeg)
