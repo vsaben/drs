@@ -1,0 +1,8 @@
+CONTROL | Test ID: 15810 | Number of Vehicles (damaged): 2 (1)
+ENVIRONMENT | Game Time: 14:56:21 | Weather (rain/snow): Unknown (75/0)
+CAMERA | Altitude: 19 | Rot: <-17.04,0.0,149.85> | Dimensions: 1920 x 1080 | VFOV: 55
+R: -0.86 -0.15 -0.48
+   0.5 -0.25 -0.83
+   0.0 0.96 -0.29
+ID: 0 | Pos: <-59.26,5.83,85.87> | Dim: <1.04,2.41,0.94> | Rot: <1.66,0.01,-170.21> | Trunc: 0.00 | Occl: 0.00 | Damage: 0 | Vehicle Class: SUVs
+ID: 1 | Pos: <13.76,-9.32,39.15> | Dim: <0.95,2.52,0.88> | Rot: <-0.52,6.47,93.99> | Trunc: 0.00 | Occl: 0.07 | Damage: 1 | Vehicle Class: SUVs
